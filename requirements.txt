@@ -5,3 +5,4 @@ numpy>=1.26
 scipy>=1.11
 plotly>=5.22
 python-dateutil>=2.9
+huggingface_hub>=0.24

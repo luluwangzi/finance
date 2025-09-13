@@ -1,3 +1,14 @@
+---
+title: MDD & CSP Analyzer
+emoji: 📉
+colorFrom: purple
+colorTo: yellow
+sdk: streamlit
+sdk_version: 1.49.1
+app_file: app.py
+pinned: false
+---
+
 ## 美股历史最大回撤与卖出认购期权（Sell Put）收益分析应用
 
 本应用基于 Streamlit 构建，提供：
