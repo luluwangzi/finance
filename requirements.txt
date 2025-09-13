@@ -1,0 +1,8 @@
+streamlit>=1.37
+yfinance>=0.2.40
+pandas>=2.2
+numpy>=1.26
+scipy>=1.11
+plotly>=5.22
+python-dateutil>=2.9
+huggingface_hub>=0.24
