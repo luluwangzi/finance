@@ -655,7 +655,16 @@ def analyze_nasdaq100_recommendations():
         
         for i, rec in enumerate(recommendations, 1):  # 显示所有推荐
             with st.container():
-                st.markdown(f"### 🎯 推荐 #{i}: {rec['symbol']} {rec['strike']:.0f}P")
+                # 创建可点击的股票代码按钮
+                col_title, col_button = st.columns([3, 1])
+                with col_title:
+                    st.markdown(f"### 🎯 推荐 #{i}: {rec['symbol']} {rec['strike']:.0f}P")
+                with col_button:
+                    if st.button(f"📊 分析 {rec['symbol']}", key=f"analyze_{rec['symbol']}_{i}"):
+                        # 设置session state来传递参数
+                        st.session_state['selected_symbol'] = rec['symbol']
+                        st.session_state['switch_to_home'] = True
+                        st.rerun()
                 
                 col1, col2, col3, col4 = st.columns(4)
                 
@@ -905,7 +914,16 @@ def main() -> None:
     # 添加侧边栏导航
     with st.sidebar:
         st.title("🧭 导航")
-        page = st.selectbox("选择页面", ["主页", "强烈推荐", "Sell Call", "关于"])
+        
+        # 检查是否有跳转到主页的请求
+        if 'switch_to_home' in st.session_state and st.session_state['switch_to_home']:
+            default_page = "主页"
+            # 清除跳转标志
+            del st.session_state['switch_to_home']
+        else:
+            default_page = "主页"
+        
+        page = st.selectbox("选择页面", ["主页", "强烈推荐", "Sell Call", "关于"], index=["主页", "强烈推荐", "Sell Call", "关于"].index(default_page))
     
     if page == "关于":
         show_about_page()
@@ -918,7 +936,14 @@ def main() -> None:
         
         with st.sidebar:
             st.header("参数")
-            symbol = st.text_input("股票代码（如 AAPL, MSFT, SPY）", value="AAPL").upper().strip()
+            # 检查是否有从强烈推荐页面传递的股票代码
+            default_symbol = "AAPL"
+            if 'selected_symbol' in st.session_state:
+                default_symbol = st.session_state['selected_symbol']
+                # 清除session state，避免重复使用
+                del st.session_state['selected_symbol']
+            
+            symbol = st.text_input("股票代码（如 AAPL, MSFT, SPY）", value=default_symbol).upper().strip()
             years = st.slider("历史回看年数", min_value=3, max_value=25, value=10, step=1)
             rf = st.number_input("无风险利率 r（年化）", min_value=0.0, max_value=0.20, value=0.045, step=0.005, format="%.3f")
             q = st.number_input("股息率 q（年化，近似）", min_value=0.0, max_value=0.10, value=0.0, step=0.005, format="%.3f")
