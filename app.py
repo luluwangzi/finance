@@ -327,8 +327,8 @@ def display_recommendation_card(recommendation: pd.Series, symbol: str) -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="美股最大回撤与卖出看跌期权分析", layout="wide")
-    st.title("美股最大回撤与卖出看跌期权（Sell Put）分析")
+    st.set_page_config(page_title="luluwangzi的期权策略", layout="wide")
+    st.title("luluwangzi的期权策略")
 
     with st.sidebar:
         st.header("参数")
@@ -355,11 +355,40 @@ def main() -> None:
     with col2:
         st.metric("最大回撤", format_percentage(mdd.max_drawdown_pct))
     with col3:
-        st.metric("峰值日期", mdd.peak_date.strftime("%Y-%m-%d") if mdd.peak_date else "—")
+        if mdd.peak_date:
+            days_ago = (datetime.now(timezone.utc) - mdd.peak_date).days
+            if days_ago <= 730:  # 24个月内
+                st.metric("历史最高点", f"{days_ago}天前", help="股价达到历史最高点的日期")
+            else:
+                st.metric("历史最高点", f"{days_ago//365}年前", help="股价达到历史最高点的日期")
+        else:
+            st.metric("历史最高点", "—")
     with col4:
-        st.metric("谷值日期", mdd.trough_date.strftime("%Y-%m-%d") if mdd.trough_date else "—")
+        if mdd.trough_date:
+            days_ago = (datetime.now(timezone.utc) - mdd.trough_date).days
+            if days_ago <= 730:  # 24个月内
+                st.metric("最大回撤低点", f"{days_ago}天前", help="最大回撤达到最低点的日期")
+            else:
+                st.metric("最大回撤低点", f"{days_ago//365}年前", help="最大回撤达到最低点的日期")
+        else:
+            st.metric("最大回撤低点", "—")
 
     st.plotly_chart(plot_price_and_drawdown(hist, mdd.series), use_container_width=True)
+    
+    # 添加说明
+    with st.expander("📊 指标说明", expanded=False):
+        st.markdown("""
+        **历史数据指标说明：**
+        - **现价**: 当前股票市场价格
+        - **最大回撤**: 股价从历史最高点到最低点的最大跌幅百分比
+        - **历史最高点**: 股价达到历史最高点的相对时间
+        - **最大回撤低点**: 最大回撤达到最低点的相对时间
+        
+        **回撤分析意义：**
+        - 回撤越小，说明股票价格相对稳定
+        - 回撤越大，说明股价波动较大，卖出看跌期权风险相对较高
+        - 建议结合历史回撤情况选择合适的期权策略
+        """)
 
     # Options analysis
     st.subheader("卖出看跌期权（CSP）收益与风险估算")
