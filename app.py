@@ -59,7 +59,10 @@ def compute_max_drawdown(close: pd.Series) -> MaxDrawdownResult:
     drawdown = (close / running_max) - 1.0
     trough_idx = drawdown.idxmin()
     max_dd = drawdown.loc[trough_idx]
-    peak_idx = close.loc[:trough_idx].idxmax()
+    
+    # 找到导致最大回撤的峰值：在回撤低点之前，且价格等于running_max的最后一个点
+    peak_idx = close.loc[:trough_idx][close.loc[:trough_idx] == running_max.loc[trough_idx]].index[-1]
+    
     return MaxDrawdownResult(max_drawdown_pct=float(max_dd), peak_date=peak_idx, trough_date=trough_idx, series=drawdown)
 
 
