@@ -39,6 +39,12 @@ def fetch_price_history(symbol: str, period_years: int = 10) -> pd.DataFrame:
     )
     if hist is None or hist.empty:
         return pd.DataFrame()
+    
+    # 处理多级列名：如果有多级列名，只保留第一级（列名）
+    if isinstance(hist.columns, pd.MultiIndex):
+        hist.columns = hist.columns.get_level_values(0)
+    
+    # 重命名列名为标题格式
     hist = hist.rename(columns=str.title)
     hist = hist.dropna(subset=["Close"])  # safety
     hist.index = pd.to_datetime(hist.index).tz_localize("UTC", nonexistent="shift_forward", ambiguous="NaT")
@@ -251,6 +257,75 @@ def plot_price_and_drawdown(hist: pd.DataFrame, drawdown: pd.Series) -> go.Figur
     return fig
 
 
+def get_yield_priority_recommendations(df: pd.DataFrame, top_n: int = 3) -> pd.DataFrame:
+    """
+    基于收益优先策略获取推荐期权
+    筛选条件：
+    1. 年化收益率 > 15%
+    2. 被指派概率 < 30%
+    3. 成交量 > 100
+    4. 按年化收益率排序
+    """
+    if df.empty:
+        return pd.DataFrame()
+    
+    # 筛选条件
+    filtered = df[
+        (df['yield_ann_cash'] > 0.15) &  # 年化收益率 > 15%
+        (df['p_assign'] < 0.30) &        # 被指派概率 < 30%
+        (df['volume'] > 100)             # 成交量 > 100
+    ].copy()
+    
+    if filtered.empty:
+        # 如果严格筛选没有结果，放宽条件
+        filtered = df[
+            (df['yield_ann_cash'] > 0.10) &  # 年化收益率 > 10%
+            (df['p_assign'] < 0.40) &        # 被指派概率 < 40%
+            (df['volume'] > 50)              # 成交量 > 50
+        ].copy()
+    
+    # 按年化收益率降序排序
+    filtered = filtered.sort_values('yield_ann_cash', ascending=False)
+    
+    return filtered.head(top_n)
+
+
+def display_recommendation_card(recommendation: pd.Series, symbol: str) -> None:
+    """显示单个推荐期权的卡片"""
+    with st.container():
+        st.markdown("---")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.markdown(f"**{symbol} {recommendation['strike']:.0f}P**")
+            st.caption(f"到期: {recommendation['expiration']}")
+            st.caption(f"DTE: {recommendation['dte']}天")
+        
+        with col2:
+            st.metric(
+                "年化收益率", 
+                f"{recommendation['yield_ann_cash']*100:.1f}%",
+                help="基于现金担保金额的年化收益率"
+            )
+            st.caption(f"权利金: ${recommendation['mid']:.2f}")
+        
+        with col3:
+            st.metric(
+                "被指派概率", 
+                f"{recommendation['p_assign']*100:.1f}%",
+                help="到期时股价低于执行价的概率"
+            )
+            st.caption(f"盈亏平衡: ${recommendation['breakeven']:.2f}")
+        
+        with col4:
+            st.metric(
+                "Delta", 
+                f"{recommendation['delta_put']:.3f}",
+                help="期权价格对股价变化的敏感度"
+            )
+            st.caption(f"成交量: {recommendation['volume']}")
+
+
 def main() -> None:
     st.set_page_config(page_title="美股最大回撤与卖出看跌期权分析", layout="wide")
     st.title("美股最大回撤与卖出看跌期权（Sell Put）分析")
@@ -309,6 +384,24 @@ def main() -> None:
     if df.empty:
         st.info("按当前筛选条件未找到合适的期权合约，可调整 DTE 或 |Delta| 范围。")
         return
+
+    # 收益优先策略推荐
+    st.subheader("🎯 收益优先策略推荐")
+    recommendations = get_yield_priority_recommendations(df, top_n=3)
+    
+    if not recommendations.empty:
+        st.success(f"基于收益优先策略，为您推荐以下 {len(recommendations)} 个最优期权：")
+        st.markdown("**筛选条件**: 年化收益率 > 15%，被指派概率 < 30%，成交量 > 100")
+        
+        for idx, (_, rec) in enumerate(recommendations.iterrows(), 1):
+            st.markdown(f"### 推荐 #{idx}")
+            display_recommendation_card(rec, symbol)
+    else:
+        st.warning("当前筛选条件下未找到符合收益优先策略的期权，建议调整参数或查看下方完整列表。")
+        st.markdown("**建议**: 可以适当放宽 DTE 范围或 Delta 范围来获得更多选择。")
+
+    st.markdown("---")
+    st.subheader("📊 完整期权列表")
 
     display = df.copy()
     display["yield_ann_cash"] = display["yield_ann_cash"].apply(format_percentage)
