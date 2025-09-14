@@ -329,172 +329,421 @@ def display_recommendation_card(recommendation: pd.Series, symbol: str) -> None:
             st.caption(f"成交量: {recommendation['volume']}")
 
 
+def show_about_page():
+    """显示About页面"""
+    st.title("📚 关于期权策略分析")
+    
+    st.markdown("""
+    ## 🎯 应用简介
+    
+    本应用基于Streamlit构建，专门用于分析美股卖出看跌期权（Cash-Secured Put, CSP）策略。
+    通过量化分析历史数据和期权链信息，为用户提供科学的期权投资决策支持。
+    """)
+    
+    st.markdown("""
+    ## 📊 核心指标计算逻辑
+    
+    ### 1. 年化收益率计算
+    
+    #### 现金担保年化收益率
+    ```
+    年化收益率 = (权利金 / 执行价) × (365 / 到期天数)
+    ```
+    
+    **参数说明：**
+    - **权利金**：卖出期权获得的收入
+    - **执行价**：期权执行价格（现金担保金额）
+    - **到期天数**：距离期权到期的时间
+    
+    **示例：**
+    - 执行价：$100
+    - 权利金：$2
+    - 到期天数：30天
+    - 年化收益率 = ($2 / $100) × (365 / 30) = 24.33%
+    
+    #### 盈亏平衡年化收益率
+    ```
+    盈亏平衡年化收益率 = (权利金 / 盈亏平衡点) × (365 / 到期天数)
+    盈亏平衡点 = 执行价 - 权利金
+    ```
+    
+    ### 2. 被指派概率计算
+    
+    #### Black-Scholes模型
+    基于Black-Scholes期权定价模型计算被指派概率：
+    
+    ```
+    P(Assignment) = P(S_T < K) = N(-d2)
+    ```
+    
+    其中：
+    ```
+    d2 = d1 - σ√T
+    d1 = [ln(S/K) + (r - q + 0.5σ²)T] / (σ√T)
+    ```
+    
+    **参数说明：**
+    - **S**：当前股价
+    - **K**：执行价
+    - **T**：到期时间（年）
+    - **σ**：隐含波动率
+    - **r**：无风险利率
+    - **q**：股息率
+    - **N()**：标准正态分布累积分布函数
+    
+    #### 影响因素
+    1. **执行价与现价关系**：价外期权被指派概率较低
+    2. **时间衰减**：到期时间越长，被指派概率越高
+    3. **波动率**：隐含波动率越高，被指派概率越高
+    4. **利率和股息**：利率越高，被指派概率越高
+    
+    ### 3. 触碰概率计算
+    
+    ```
+    触碰概率 ≈ 2 × P(ITM at expiration)
+    ```
+    
+    这是一个近似公式，用于估算期权在到期前被触及的概率。
+    """)
+    
+    st.markdown("""
+    ## ⚠️ 风险提示
+    
+    1. **模型假设**：基于Black-Scholes模型，假设股价服从对数正态分布
+    2. **市场现实**：实际市场可能存在跳跃、波动率微笑等现象
+    3. **仅供参考**：计算结果仅用于研究和教育目的，不构成投资建议
+    4. **期权风险**：期权交易具有高风险，可能导致重大损失
+    5. **充分理解**：请在充分理解风险的前提下进行投资决策
+    """)
+    
+    st.markdown("""
+    ## 🔧 技术实现
+    
+    - **数据源**：yfinance API获取实时股票和期权数据
+    - **计算引擎**：Python + NumPy + SciPy进行数值计算
+    - **可视化**：Plotly进行交互式图表展示
+    - **部署平台**：Streamlit Cloud
+    """)
+
+def get_nasdaq100_stocks():
+    """获取纳斯达克100指数成分股"""
+    # 纳斯达克100主要成分股（简化列表）
+    nasdaq100_stocks = [
+        "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AVGO", "COST", "PEP",
+        "NFLX", "ADBE", "CSCO", "INTC", "AMD", "QCOM", "TXN", "CMCSA", "HON", "AMAT",
+        "INTU", "BKNG", "ISRG", "VRTX", "GILD", "ADP", "REGN", "PYPL", "SBUX", "MDLZ",
+        "FISV", "ATVI", "CSX", "CHTR", "WBA", "ILMN", "AMGN", "BIIB", "EXC", "EA",
+        "LRCX", "KLAC", "MRNA", "CTAS", "NXPI", "SNPS", "CDNS", "ORLY", "IDXX", "DXCM"
+    ]
+    return nasdaq100_stocks
+
+def analyze_nasdaq100_recommendations():
+    """分析纳斯达克100成分股，找出强烈推荐的期权"""
+    st.subheader("🔥 强烈推荐买入")
+    st.markdown("基于纳斯达克100成分股分析，筛选年化收益率>25%且被指派概率<30%的期权")
+    
+    # 获取纳斯达克100股票列表
+    stocks = get_nasdaq100_stocks()
+    
+    # 存储推荐结果
+    recommendations = []
+    
+    # 显示进度条
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for i, symbol in enumerate(stocks[:20]):  # 限制前20只股票以节省时间
+        status_text.text(f"正在分析 {symbol}...")
+        progress_bar.progress((i + 1) / 20)
+        
+        try:
+            # 获取期权数据
+            exps = fetch_option_expirations(symbol)
+            if not exps:
+                continue
+                
+            # 获取历史数据
+            hist = fetch_price_history(symbol, 2)
+            if hist.empty:
+                continue
+                
+            spot = estimate_spot_price(symbol, hist)
+            if spot is None:
+                continue
+            
+            # 分析期权
+            df = analyze_puts(
+                symbol=symbol,
+                spot=spot,
+                expirations=exps,
+                dte_min=7,
+                dte_max=45,
+                target_delta_abs_min=0.10,
+                target_delta_abs_max=0.40,
+                risk_free_rate=0.045,
+                dividend_yield=0.0,
+            )
+            
+            if df.empty:
+                continue
+            
+            # 筛选符合条件的期权
+            filtered = df[
+                (df['yield_ann_cash'] > 0.25) &  # 年化收益率 > 25%
+                (df['p_assign'] < 0.30) &        # 被指派概率 < 30%
+                (df['volume'] > 50)              # 成交量 > 50
+            ]
+            
+            if not filtered.empty:
+                # 取最佳推荐
+                best = filtered.sort_values('yield_ann_cash', ascending=False).iloc[0]
+                recommendations.append({
+                    'symbol': symbol,
+                    'spot': spot,
+                    'strike': best['strike'],
+                    'expiration': best['expiration'],
+                    'dte': best['dte'],
+                    'yield_ann': best['yield_ann_cash'],
+                    'p_assign': best['p_assign'],
+                    'premium': best['mid'],
+                    'breakeven': best['breakeven'],
+                    'delta': best['delta_put'],
+                    'volume': best['volume']
+                })
+                
+        except Exception as e:
+            continue
+    
+    progress_bar.empty()
+    status_text.empty()
+    
+    # 显示推荐结果
+    if recommendations:
+        # 按年化收益率排序
+        recommendations.sort(key=lambda x: x['yield_ann'], reverse=True)
+        
+        st.success(f"找到 {len(recommendations)} 个强烈推荐期权！")
+        
+        for i, rec in enumerate(recommendations[:3], 1):  # 显示前3个
+            with st.container():
+                st.markdown(f"### 🎯 推荐 #{i}: {rec['symbol']} {rec['strike']:.0f}P")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric(
+                        "年化收益率", 
+                        f"{rec['yield_ann']*100:.1f}%",
+                        help="基于现金担保金额的年化收益率"
+                    )
+                    st.caption(f"现价: ${rec['spot']:.2f}")
+                
+                with col2:
+                    st.metric(
+                        "被指派概率", 
+                        f"{rec['p_assign']*100:.1f}%",
+                        help="到期被要求买入股票的概率"
+                    )
+                    st.caption(f"执行价: ${rec['strike']:.2f}")
+                
+                with col3:
+                    st.metric(
+                        "权利金", 
+                        f"${rec['premium']:.2f}",
+                        help="每份期权的收入"
+                    )
+                    st.caption(f"盈亏平衡: ${rec['breakeven']:.2f}")
+                
+                with col4:
+                    st.metric(
+                        "到期时间", 
+                        f"{rec['dte']}天",
+                        help="距离期权到期的时间"
+                    )
+                    st.caption(f"到期日: {rec['expiration']}")
+                
+                st.markdown("---")
+    else:
+        st.warning("当前市场条件下未找到符合条件的强烈推荐期权。")
+        st.info("建议：可以适当放宽筛选条件或稍后重试。")
+
 def main() -> None:
     st.set_page_config(page_title="luluwangzi的期权策略", layout="wide")
-    st.title("luluwangzi的期权策略")
-
+    
+    # 添加侧边栏导航
     with st.sidebar:
-        st.header("参数")
-        symbol = st.text_input("股票代码（如 AAPL, MSFT, SPY）", value="AAPL").upper().strip()
-        years = st.slider("历史回看年数", min_value=3, max_value=25, value=10, step=1)
-        rf = st.number_input("无风险利率 r（年化）", min_value=0.0, max_value=0.20, value=0.045, step=0.005, format="%.3f")
-        q = st.number_input("股息率 q（年化，近似）", min_value=0.0, max_value=0.10, value=0.0, step=0.005, format="%.3f")
-        dte_range = st.slider("到期天数范围（DTE）", min_value=1, max_value=365, value=(7, 45), step=1)
-        delta_abs_range = st.slider("目标 |Delta| 范围（卖出看跌）", min_value=0.01, max_value=0.95, value=(0.15, 0.35), step=0.01)
-        st.caption("注：Delta 为看跌期权的绝对值筛选区间")
-
-    # Price history and MDD
-    hist = fetch_price_history(symbol, years)
-    if hist.empty:
-        st.error("未能获取历史数据，请检查股票代码或稍后重试。")
-        return
-
-    mdd = compute_max_drawdown(hist["Close"]) 
-    spot = estimate_spot_price(symbol, hist)
-
-    # 计算历史最高价信息
-    hist_high_price = hist["Close"].max()
-    hist_high_date = hist["Close"].idxmax()
-    hist_high_days_ago = (datetime.now(timezone.utc) - hist_high_date).days
+        st.title("🧭 导航")
+        page = st.selectbox("选择页面", ["主页", "强烈推荐", "关于"])
     
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("现价", format_currency(spot) if spot is not None else "—")
-    with col2:
-        st.metric("最大回撤", format_percentage(mdd.max_drawdown_pct))
-    with col3:
-        # 历史最高价显示
-        if hist_high_days_ago <= 730:  # 24个月内
-            time_str = f"{hist_high_days_ago}天前"
-        else:
-            time_str = f"{hist_high_days_ago//365}年前"
-        st.metric("历史最高价", f"${hist_high_price:.2f}", delta=time_str, help=f"历史最高价: ${hist_high_price:.2f} ({hist_high_date.strftime('%Y-%m-%d')})")
-    with col4:
-        # 最大回撤低点显示
-        if mdd.trough_date and mdd.peak_date:
-            trough_days_ago = (datetime.now(timezone.utc) - mdd.trough_date).days
-            if trough_days_ago <= 730:  # 24个月内
-                time_str = f"{trough_days_ago}天前"
+    if page == "关于":
+        show_about_page()
+    elif page == "强烈推荐":
+        analyze_nasdaq100_recommendations()
+    else:  # 主页
+        st.title("luluwangzi的期权策略")
+        
+        with st.sidebar:
+            st.header("参数")
+            symbol = st.text_input("股票代码（如 AAPL, MSFT, SPY）", value="AAPL").upper().strip()
+            years = st.slider("历史回看年数", min_value=3, max_value=25, value=10, step=1)
+            rf = st.number_input("无风险利率 r（年化）", min_value=0.0, max_value=0.20, value=0.045, step=0.005, format="%.3f")
+            q = st.number_input("股息率 q（年化，近似）", min_value=0.0, max_value=0.10, value=0.0, step=0.005, format="%.3f")
+            dte_range = st.slider("到期天数范围（DTE）", min_value=1, max_value=365, value=(7, 45), step=1)
+            delta_abs_range = st.slider("目标 |Delta| 范围（卖出看跌）", min_value=0.01, max_value=0.95, value=(0.15, 0.35), step=0.01)
+            st.caption("注：Delta 为看跌期权的绝对值筛选区间")
+
+        # Price history and MDD
+        hist = fetch_price_history(symbol, years)
+        if hist.empty:
+            st.error("未能获取历史数据，请检查股票代码或稍后重试。")
+            return
+
+        mdd = compute_max_drawdown(hist["Close"]) 
+        spot = estimate_spot_price(symbol, hist)
+
+        # 计算历史最高价信息
+        hist_high_price = hist["Close"].max()
+        hist_high_date = hist["Close"].idxmax()
+        hist_high_days_ago = (datetime.now(timezone.utc) - hist_high_date).days
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("现价", format_currency(spot) if spot is not None else "—")
+        with col2:
+            st.metric("最大回撤", format_percentage(mdd.max_drawdown_pct))
+        with col3:
+            # 历史最高价显示
+            if hist_high_days_ago <= 730:  # 24个月内
+                time_str = f"{hist_high_days_ago}天前"
             else:
-                time_str = f"{trough_days_ago//365}年前"
+                time_str = f"{hist_high_days_ago//365}年前"
+            st.metric("历史最高价", f"${hist_high_price:.2f}", delta=time_str, help=f"历史最高价: ${hist_high_price:.2f} ({hist_high_date.strftime('%Y-%m-%d')})")
+        with col4:
+            # 最大回撤低点显示
+            if mdd.trough_date and mdd.peak_date:
+                trough_days_ago = (datetime.now(timezone.utc) - mdd.trough_date).days
+                if trough_days_ago <= 730:  # 24个月内
+                    time_str = f"{trough_days_ago}天前"
+                else:
+                    time_str = f"{trough_days_ago//365}年前"
+                
+                peak_price = hist.loc[mdd.peak_date, 'Close']
+                trough_price = hist.loc[mdd.trough_date, 'Close']
+                st.metric("最大回撤低点", f"${trough_price:.2f}", delta=time_str, help=f"从${peak_price:.2f}回撤到${trough_price:.2f} ({mdd.trough_date.strftime('%Y-%m-%d')})")
+            else:
+                st.metric("最大回撤低点", "—")
+
+        st.plotly_chart(plot_price_and_drawdown(hist, mdd.series), use_container_width=True)
+        
+        # 添加说明
+        with st.expander("📊 指标说明", expanded=False):
+            st.markdown("""
+            **历史数据指标说明：**
+            - **现价**: 当前股票市场价格
+            - **最大回撤**: 历史上从某个峰值到谷值的最大跌幅百分比
+            - **历史最高价**: 显示价格和时间，整个历史期间的最高价格
+            - **最大回撤低点**: 显示价格和时间，以及从哪个峰值回撤而来
             
-            peak_price = hist.loc[mdd.peak_date, 'Close']
-            trough_price = hist.loc[mdd.trough_date, 'Close']
-            st.metric("最大回撤低点", f"${trough_price:.2f}", delta=time_str, help=f"从${peak_price:.2f}回撤到${trough_price:.2f} ({mdd.trough_date.strftime('%Y-%m-%d')})")
+            **显示格式说明：**
+            - 主值显示价格（如 $183.15）
+            - Delta显示相对时间（如 "30天前"）
+            - 悬停提示显示完整信息（价格、具体日期、回撤详情）
+            
+            **重要区别：**
+            - **历史最高价** ≠ **最大回撤的峰值**
+            - 历史最高价是绝对的最高价格
+            - 最大回撤的峰值是导致最大回撤的那个峰值（可能不是历史最高价）
+            
+            **回撤分析意义：**
+            - 回撤越小，说明股票价格相对稳定
+            - 回撤越大，说明股价波动较大，卖出看跌期权风险相对较高
+            - 建议结合历史回撤情况选择合适的期权策略
+            """)
+
+        # Options analysis
+        st.subheader("卖出看跌期权（CSP）收益与风险估算")
+        exps = fetch_option_expirations(symbol)
+        if not exps:
+            st.warning("该标的暂无可用期权到期日或数据获取失败。")
+            return
+
+        dte_min, dte_max = dte_range
+        df = analyze_puts(
+            symbol=symbol,
+            spot=spot if spot is not None else float(hist["Close"].iloc[-1]),
+            expirations=exps,
+            dte_min=int(dte_min),
+            dte_max=int(dte_max),
+            target_delta_abs_min=float(delta_abs_range[0]),
+            target_delta_abs_max=float(delta_abs_range[1]),
+            risk_free_rate=float(rf),
+            dividend_yield=float(q),
+        )
+
+        if df.empty:
+            st.info("按当前筛选条件未找到合适的期权合约，可调整 DTE 或 |Delta| 范围。")
+            return
+
+        # 收益优先策略推荐
+        st.subheader("🎯 收益优先策略推荐")
+        recommendations = get_yield_priority_recommendations(df, top_n=3)
+        
+        if not recommendations.empty:
+            st.success(f"基于收益优先策略，为您推荐以下 {len(recommendations)} 个最优期权：")
+            st.markdown("**筛选条件**: 年化收益率 > 15%，被指派概率 < 30%，成交量 > 100")
+            
+            for idx, (_, rec) in enumerate(recommendations.iterrows(), 1):
+                st.markdown(f"### 推荐 #{idx}")
+                display_recommendation_card(rec, symbol)
         else:
-            st.metric("最大回撤低点", "—")
+            st.warning("当前筛选条件下未找到符合收益优先策略的期权，建议调整参数或查看下方完整列表。")
+            st.markdown("**建议**: 可以适当放宽 DTE 范围或 Delta 范围来获得更多选择。")
 
-    st.plotly_chart(plot_price_and_drawdown(hist, mdd.series), use_container_width=True)
-    
-    # 添加说明
-    with st.expander("📊 指标说明", expanded=False):
-        st.markdown("""
-        **历史数据指标说明：**
-        - **现价**: 当前股票市场价格
-        - **最大回撤**: 历史上从某个峰值到谷值的最大跌幅百分比
-        - **历史最高价**: 显示价格和时间，整个历史期间的最高价格
-        - **最大回撤低点**: 显示价格和时间，以及从哪个峰值回撤而来
-        
-        **显示格式说明：**
-        - 主值显示价格（如 $183.15）
-        - Delta显示相对时间（如 "30天前"）
-        - 悬停提示显示完整信息（价格、具体日期、回撤详情）
-        
-        **重要区别：**
-        - **历史最高价** ≠ **最大回撤的峰值**
-        - 历史最高价是绝对的最高价格
-        - 最大回撤的峰值是导致最大回撤的那个峰值（可能不是历史最高价）
-        
-        **回撤分析意义：**
-        - 回撤越小，说明股票价格相对稳定
-        - 回撤越大，说明股价波动较大，卖出看跌期权风险相对较高
-        - 建议结合历史回撤情况选择合适的期权策略
-        """)
+        st.markdown("---")
+        st.subheader("📊 完整期权列表")
 
-    # Options analysis
-    st.subheader("卖出看跌期权（CSP）收益与风险估算")
-    exps = fetch_option_expirations(symbol)
-    if not exps:
-        st.warning("该标的暂无可用期权到期日或数据获取失败。")
-        return
+        display = df.copy()
+        display["yield_ann_cash"] = display["yield_ann_cash"].apply(format_percentage)
+        display["yield_ann_breakeven"] = display["yield_ann_breakeven"].apply(format_percentage)
+        display["p_assign"] = display["p_assign"].apply(format_percentage)
+        display["p_touch"] = display["p_touch"].apply(format_percentage)
+        display["mid"] = display["mid"].apply(format_currency)
+        display["premium_contract"] = display["premium_contract"].apply(format_currency)
+        display["breakeven"] = display["breakeven"].apply(format_currency)
+        display["iv"] = display["iv"].apply(lambda v: f"{v*100:.2f}%" if np.isfinite(v) else "—")
+        display["delta_put"] = display["delta_put"].apply(lambda v: f"{v:.3f}" if np.isfinite(v) else "—")
 
-    dte_min, dte_max = dte_range
-    df = analyze_puts(
-        symbol=symbol,
-        spot=spot if spot is not None else float(hist["Close"].iloc[-1]),
-        expirations=exps,
-        dte_min=int(dte_min),
-        dte_max=int(dte_max),
-        target_delta_abs_min=float(delta_abs_range[0]),
-        target_delta_abs_max=float(delta_abs_range[1]),
-        risk_free_rate=float(rf),
-        dividend_yield=float(q),
-    )
+        st.dataframe(
+            display[
+                [
+                    "expiration",
+                    "dte",
+                    "strike",
+                    "mid",
+                    "premium_contract",
+                    "iv",
+                    "delta_put",
+                    "breakeven",
+                    "yield_ann_cash",
+                    "yield_ann_breakeven",
+                    "p_assign",
+                    "p_touch",
+                    "volume",
+                    "openInterest",
+                    "contractSymbol",
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
 
-    if df.empty:
-        st.info("按当前筛选条件未找到合适的期权合约，可调整 DTE 或 |Delta| 范围。")
-        return
+        top_n = st.slider("显示前 N 个候选（按年化收益率排序）", 1, 50, 10)
+        st.write("推荐候选：")
+        st.dataframe(display.head(top_n), use_container_width=True, hide_index=True)
 
-    # 收益优先策略推荐
-    st.subheader("🎯 收益优先策略推荐")
-    recommendations = get_yield_priority_recommendations(df, top_n=3)
-    
-    if not recommendations.empty:
-        st.success(f"基于收益优先策略，为您推荐以下 {len(recommendations)} 个最优期权：")
-        st.markdown("**筛选条件**: 年化收益率 > 15%，被指派概率 < 30%，成交量 > 100")
-        
-        for idx, (_, rec) in enumerate(recommendations.iterrows(), 1):
-            st.markdown(f"### 推荐 #{idx}")
-            display_recommendation_card(rec, symbol)
-    else:
-        st.warning("当前筛选条件下未找到符合收益优先策略的期权，建议调整参数或查看下方完整列表。")
-        st.markdown("**建议**: 可以适当放宽 DTE 范围或 Delta 范围来获得更多选择。")
-
-    st.markdown("---")
-    st.subheader("📊 完整期权列表")
-
-    display = df.copy()
-    display["yield_ann_cash"] = display["yield_ann_cash"].apply(format_percentage)
-    display["yield_ann_breakeven"] = display["yield_ann_breakeven"].apply(format_percentage)
-    display["p_assign"] = display["p_assign"].apply(format_percentage)
-    display["p_touch"] = display["p_touch"].apply(format_percentage)
-    display["mid"] = display["mid"].apply(format_currency)
-    display["premium_contract"] = display["premium_contract"].apply(format_currency)
-    display["breakeven"] = display["breakeven"].apply(format_currency)
-    display["iv"] = display["iv"].apply(lambda v: f"{v*100:.2f}%" if np.isfinite(v) else "—")
-    display["delta_put"] = display["delta_put"].apply(lambda v: f"{v:.3f}" if np.isfinite(v) else "—")
-
-    st.dataframe(
-        display[
-            [
-                "expiration",
-                "dte",
-                "strike",
-                "mid",
-                "premium_contract",
-                "iv",
-                "delta_put",
-                "breakeven",
-                "yield_ann_cash",
-                "yield_ann_breakeven",
-                "p_assign",
-                "p_touch",
-                "volume",
-                "openInterest",
-                "contractSymbol",
-            ]
-        ],
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    top_n = st.slider("显示前 N 个候选（按年化收益率排序）", 1, 50, 10)
-    st.write("推荐候选：")
-    st.dataframe(display.head(top_n), use_container_width=True, hide_index=True)
-
-    st.caption(
-        "风险提示：本工具基于历史数据与简化模型进行估计，不构成任何投资建议。期权具有高风险，请谨慎评估。"
-    )
+        st.caption(
+            "风险提示：本工具基于历史数据与简化模型进行估计，不构成任何投资建议。期权具有高风险，请谨慎评估。"
+        )
 
 
 if __name__ == "__main__":
