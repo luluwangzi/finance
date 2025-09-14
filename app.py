@@ -135,6 +135,14 @@ def touch_probability_approx(spot: float, strike: float, t_years: float, iv: flo
     # Simple approximation: Probability of touching ≈ 2 × P(ITM at expiration)
     return float(min(1.0, max(0.0, 2.0 * p_itm)))
 
+def touch_probability_approx_call(spot: float, strike: float, t_years: float, iv: float, r: float = 0.0, q: float = 0.0) -> float:
+    """计算看涨期权的触碰概率近似值"""
+    p_itm = call_assignment_probability(spot, strike, t_years, iv, r, q)
+    if not np.isfinite(p_itm):
+        return float("nan")
+    # Simple approximation: Probability of touching ≈ 2 × P(ITM at expiration)
+    return float(min(1.0, max(0.0, 2.0 * p_itm)))
+
 
 def compute_delta_put(spot: float, strike: float, t_years: float, iv: float, r: float = 0.0, q: float = 0.0) -> float:
     d1, _ = bs_d1_d2(spot, strike, t_years, iv, r, q)
@@ -191,7 +199,14 @@ def analyze_calls(
             
             for _, row in calls.iterrows():
                 strike = row["strike"]
-                mid = (row["bid"] + row["ask"]) / 2
+                bid = row["bid"]
+                ask = row["ask"]
+                
+                # 检查bid和ask是否有效
+                if pd.isna(bid) or pd.isna(ask) or bid <= 0 or ask <= 0:
+                    continue
+                    
+                mid = (bid + ask) / 2
                 iv = row["impliedVolatility"]
                 volume = row["volume"]
                 open_interest = row["openInterest"]
@@ -218,7 +233,7 @@ def analyze_calls(
                 p_assign = call_assignment_probability(spot, strike, t_years, iv, risk_free_rate, dividend_yield)
                 
                 # 计算触碰概率（近似）
-                p_touch = touch_probability_approx(spot, strike, t_years, iv, risk_free_rate, dividend_yield)
+                p_touch = touch_probability_approx_call(spot, strike, t_years, iv, risk_free_rate, dividend_yield)
                 
                 rows.append({
                     "expiration": exp_str,
@@ -685,7 +700,14 @@ def show_sell_call_page():
     # 获取当前股价
     try:
         ticker = yf.Ticker(symbol)
-        current_price = ticker.history(period="1d")["Close"].iloc[-1]
+        hist = ticker.history(period="1d")
+        if hist.empty:
+            st.error(f"无法获取 {symbol} 的历史数据")
+            return
+        current_price = hist["Close"].iloc[-1]
+        if pd.isna(current_price) or current_price <= 0:
+            st.error(f"获取到的 {symbol} 股价无效: {current_price}")
+            return
         st.success(f"当前 {symbol} 股价: ${current_price:.2f}")
         
         # 计算持仓盈亏
@@ -755,48 +777,49 @@ def show_sell_call_page():
         recommendations = df.head(5)  # 显示前5个作为参考
     
     # 显示推荐期权
-    for idx, (_, rec) in enumerate(recommendations.head(3).iterrows(), 1):
-        st.markdown(f"### 推荐 #{idx}: {symbol} {rec['strike']:.0f}C")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric(
-                "年化收益率", 
-                f"{rec['yield_ann_cost_basis']*100:.1f}%",
-                help="基于持仓成本的年化收益率"
-            )
-            st.caption(f"现价: ${current_price:.2f}")
-        
-        with col2:
-            st.metric(
-                "被指派概率", 
-                f"{rec['p_assign']*100:.1f}%",
-                help="到期被要求卖出股票的概率"
-            )
-            st.caption(f"执行价: ${rec['strike']:.2f}")
-        
-        with col3:
-            st.metric(
-                "权利金", 
-                f"${rec['mid']:.2f}",
-                help="每份期权的收入"
-            )
-            st.caption(f"盈亏平衡: ${rec['breakeven']:.2f}")
-        
-        with col4:
-            st.metric(
-                "到期时间", 
-                f"{rec['dte']}天",
-                help="距离期权到期的时间"
-            )
-            st.caption(f"到期日: {rec['expiration']}")
-        
-        # 计算总收益
-        total_premium = rec['mid'] * shares
-        st.info(f"**总权利金收入**: ${total_premium:.2f} (${shares} 股 × ${rec['mid']:.2f})")
-        
-        st.markdown("---")
+    if not recommendations.empty:
+        for idx, (_, rec) in enumerate(recommendations.head(3).iterrows(), 1):
+            st.markdown(f"### 推荐 #{idx}: {symbol} {rec['strike']:.0f}C")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric(
+                    "年化收益率", 
+                    f"{rec['yield_ann_cost_basis']*100:.1f}%",
+                    help="基于持仓成本的年化收益率"
+                )
+                st.caption(f"现价: ${current_price:.2f}")
+            
+            with col2:
+                st.metric(
+                    "被指派概率", 
+                    f"{rec['p_assign']*100:.1f}%",
+                    help="到期被要求卖出股票的概率"
+                )
+                st.caption(f"执行价: ${rec['strike']:.2f}")
+            
+            with col3:
+                st.metric(
+                    "权利金", 
+                    f"${rec['mid']:.2f}",
+                    help="每份期权的收入"
+                )
+                st.caption(f"盈亏平衡: ${rec['breakeven']:.2f}")
+            
+            with col4:
+                st.metric(
+                    "到期时间", 
+                    f"{rec['dte']}天",
+                    help="距离期权到期的时间"
+                )
+                st.caption(f"到期日: {rec['expiration']}")
+            
+            # 计算总收益
+            total_premium = rec['mid'] * shares
+            st.info(f"**总权利金收入**: ${total_premium:.2f} (${shares} 股 × ${rec['mid']:.2f})")
+            
+            st.markdown("---")
     
     # 显示完整期权列表
     st.subheader("📋 完整期权列表")
