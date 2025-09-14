@@ -352,20 +352,21 @@ def main() -> None:
     mdd = compute_max_drawdown(hist["Close"]) 
     spot = estimate_spot_price(symbol, hist)
 
+    # 计算历史最高价信息
+    hist_high_price = hist["Close"].max()
+    hist_high_date = hist["Close"].idxmax()
+    hist_high_days_ago = (datetime.now(timezone.utc) - hist_high_date).days
+    
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("现价", format_currency(spot) if spot is not None else "—")
     with col2:
         st.metric("最大回撤", format_percentage(mdd.max_drawdown_pct))
     with col3:
-        if mdd.peak_date:
-            days_ago = (datetime.now(timezone.utc) - mdd.peak_date).days
-            if days_ago <= 730:  # 24个月内
-                st.metric("历史最高点", f"{days_ago}天前", help="股价达到历史最高点的日期")
-            else:
-                st.metric("历史最高点", f"{days_ago//365}年前", help="股价达到历史最高点的日期")
+        if hist_high_days_ago <= 730:  # 24个月内
+            st.metric("历史最高价", f"{hist_high_days_ago}天前", help=f"历史最高价 ${hist_high_price:.2f}")
         else:
-            st.metric("历史最高点", "—")
+            st.metric("历史最高价", f"{hist_high_days_ago//365}年前", help=f"历史最高价 ${hist_high_price:.2f}")
     with col4:
         if mdd.trough_date:
             days_ago = (datetime.now(timezone.utc) - mdd.trough_date).days
@@ -383,9 +384,14 @@ def main() -> None:
         st.markdown("""
         **历史数据指标说明：**
         - **现价**: 当前股票市场价格
-        - **最大回撤**: 股价从历史最高点到最低点的最大跌幅百分比
-        - **历史最高点**: 股价达到历史最高点的相对时间
+        - **最大回撤**: 历史上从某个峰值到谷值的最大跌幅百分比
+        - **历史最高价**: 整个历史期间的最高价格及其时间
         - **最大回撤低点**: 最大回撤达到最低点的相对时间
+        
+        **重要区别：**
+        - **历史最高价** ≠ **最大回撤的峰值**
+        - 历史最高价是绝对的最高价格
+        - 最大回撤的峰值是导致最大回撤的那个峰值（可能不是历史最高价）
         
         **回撤分析意义：**
         - 回撤越小，说明股票价格相对稳定
