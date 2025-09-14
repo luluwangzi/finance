@@ -119,6 +119,14 @@ def put_assignment_probability(spot: float, strike: float, t_years: float, iv: f
     # P_put_ITM = P(S_T < K) = N(-d2)
     return float(norm.cdf(-d2))
 
+def call_assignment_probability(spot: float, strike: float, t_years: float, iv: float, r: float = 0.0, q: float = 0.0) -> float:
+    """计算卖出看涨期权的被指派概率（到期时股价高于执行价的概率）"""
+    _, d2 = bs_d1_d2(spot, strike, t_years, iv, r, q)
+    if not np.isfinite(d2):
+        return float("nan")
+    # P_call_ITM = P(S_T > K) = 1 - N(-d2) = N(d2)
+    return float(norm.cdf(d2))
+
 
 def touch_probability_approx(spot: float, strike: float, t_years: float, iv: float, r: float = 0.0, q: float = 0.0) -> float:
     p_itm = put_assignment_probability(spot, strike, t_years, iv, r, q)
@@ -150,6 +158,94 @@ def mid_price(row: pd.Series) -> Optional[float]:
         return float(np.median(prices))
     return None
 
+
+def analyze_calls(
+    symbol: str,
+    spot: float,
+    expirations: List[str],
+    dte_min: int,
+    dte_max: int,
+    target_delta_abs_min: float,
+    target_delta_abs_max: float,
+    risk_free_rate: float,
+    dividend_yield: float,
+) -> pd.DataFrame:
+    """分析卖出看涨期权（Covered Call）"""
+    now_utc = datetime.now(timezone.utc)
+    rows: List[dict] = []
+    
+    for exp_str in expirations:
+        exp = datetime.fromisoformat(exp_str.replace("Z", "+00:00"))
+        dte = (exp - now_utc).days
+        if dte < dte_min or dte > dte_max:
+            continue
+            
+        try:
+            chain = yf.Ticker(symbol).option_chain(exp_str)
+            calls = chain.calls
+            
+            if calls.empty:
+                continue
+                
+            t_years = dte / 365.0
+            
+            for _, row in calls.iterrows():
+                strike = row["strike"]
+                mid = (row["bid"] + row["ask"]) / 2
+                iv = row["impliedVolatility"]
+                volume = row["volume"]
+                open_interest = row["openInterest"]
+                
+                if mid <= 0 or not np.isfinite(iv) or iv <= 0:
+                    continue
+                
+                # 计算Delta（看涨期权）
+                d1, d2 = bs_d1_d2(spot, strike, t_years, iv, risk_free_rate, dividend_yield)
+                if not np.isfinite(d1):
+                    continue
+                    
+                delta_call = norm.cdf(d1)
+                delta_abs = abs(delta_call)
+                
+                if delta_abs < target_delta_abs_min or delta_abs > target_delta_abs_max:
+                    continue
+                
+                # 计算年化收益率（基于持仓成本）
+                yield_ann_cash = (mid / spot) * (365 / dte)
+                yield_ann_breakeven = (mid / strike) * (365 / dte)
+                
+                # 计算被指派概率
+                p_assign = call_assignment_probability(spot, strike, t_years, iv, risk_free_rate, dividend_yield)
+                
+                # 计算触碰概率（近似）
+                p_touch = touch_probability_approx(spot, strike, t_years, iv, risk_free_rate, dividend_yield)
+                
+                rows.append({
+                    "expiration": exp_str,
+                    "dte": dte,
+                    "strike": strike,
+                    "mid": mid,
+                    "premium_contract": mid * 100,
+                    "iv": iv,
+                    "delta_call": delta_call,
+                    "breakeven": strike + mid,  # 看涨期权的盈亏平衡点
+                    "yield_ann_cash": yield_ann_cash,
+                    "yield_ann_breakeven": yield_ann_breakeven,
+                    "p_assign": p_assign,
+                    "p_touch": p_touch,
+                    "volume": volume,
+                    "openInterest": open_interest,
+                    "contractSymbol": row["contractSymbol"],
+                })
+                
+        except Exception as e:
+            continue
+    
+    if not rows:
+        return pd.DataFrame()
+    
+    df = pd.DataFrame(rows)
+    return df.sort_values("yield_ann_cash", ascending=False)
 
 def analyze_puts(
     symbol: str,
@@ -524,7 +620,7 @@ def analyze_nasdaq100_recommendations():
         
         st.success(f"找到 {len(recommendations)} 个强烈推荐期权！")
         
-        for i, rec in enumerate(recommendations[:3], 1):  # 显示前3个
+        for i, rec in enumerate(recommendations, 1):  # 显示所有推荐
             with st.container():
                 st.markdown(f"### 🎯 推荐 #{i}: {rec['symbol']} {rec['strike']:.0f}P")
                 
@@ -567,18 +663,215 @@ def analyze_nasdaq100_recommendations():
         st.warning("当前市场条件下未找到符合条件的强烈推荐期权。")
         st.info("建议：可以适当放宽筛选条件或稍后重试。")
 
+def show_sell_call_page():
+    """显示Sell Call页面"""
+    st.title("📈 Sell Call 策略分析")
+    st.markdown("基于您已有持仓的股票，分析卖出看涨期权（Covered Call）的收益和风险")
+    
+    with st.sidebar:
+        st.header("持仓信息")
+        symbol = st.text_input("股票代码", value="AAPL").upper().strip()
+        cost_basis = st.number_input("持仓成本价 ($)", min_value=0.01, value=150.0, step=0.01, format="%.2f")
+        shares = st.number_input("持股数量", min_value=1, value=100, step=1)
+        
+        st.header("分析参数")
+        years = st.slider("历史回看年数", min_value=1, max_value=10, value=2, step=1)
+        rf = st.number_input("无风险利率 r（年化）", min_value=0.0, max_value=0.20, value=0.045, step=0.005, format="%.3f")
+        q = st.number_input("股息率 q（年化）", min_value=0.0, max_value=0.10, value=0.0, step=0.005, format="%.3f")
+        dte_range = st.slider("到期天数范围（DTE）", min_value=1, max_value=365, value=(7, 45), step=1)
+        delta_abs_range = st.slider("目标 |Delta| 范围（卖出看涨）", min_value=0.01, max_value=0.95, value=(0.15, 0.35), step=0.01)
+        st.caption("注：Delta 为看涨期权的绝对值筛选区间")
+    
+    # 获取当前股价
+    try:
+        ticker = yf.Ticker(symbol)
+        current_price = ticker.history(period="1d")["Close"].iloc[-1]
+        st.success(f"当前 {symbol} 股价: ${current_price:.2f}")
+        
+        # 计算持仓盈亏
+        total_cost = cost_basis * shares
+        current_value = current_price * shares
+        unrealized_pnl = current_value - total_cost
+        pnl_pct = (unrealized_pnl / total_cost) * 100
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("持仓成本", f"${total_cost:,.2f}")
+        with col2:
+            st.metric("当前价值", f"${current_value:,.2f}")
+        with col3:
+            st.metric("未实现盈亏", f"${unrealized_pnl:,.2f}", delta=f"{pnl_pct:.1f}%")
+        with col4:
+            st.metric("每股成本", f"${cost_basis:.2f}")
+            
+    except Exception as e:
+        st.error(f"无法获取 {symbol} 的股价信息: {str(e)}")
+        return
+    
+    # 获取期权数据
+    st.subheader("📊 Sell Call 期权分析")
+    exps = fetch_option_expirations(symbol)
+    if not exps:
+        st.warning("该标的暂无可用期权到期日或数据获取失败。")
+        return
+    
+    dte_min, dte_max = dte_range
+    df = analyze_calls(
+        symbol=symbol,
+        spot=current_price,
+        expirations=exps,
+        dte_min=int(dte_min),
+        dte_max=int(dte_max),
+        target_delta_abs_min=float(delta_abs_range[0]),
+        target_delta_abs_max=float(delta_abs_range[1]),
+        risk_free_rate=float(rf),
+        dividend_yield=float(q),
+    )
+    
+    if df.empty:
+        st.info("按当前筛选条件未找到合适的看涨期权合约，可调整 DTE 或 |Delta| 范围。")
+        return
+    
+    # 计算基于持仓成本的年化收益率
+    df['yield_ann_cost_basis'] = (df['mid'] / cost_basis) * (365 / df['dte'])
+    
+    # 筛选推荐期权
+    st.subheader("🎯 推荐 Sell Call 期权")
+    
+    # 筛选条件：年化收益率 > 15%，被指派概率 < 30%，成交量 > 50
+    strict_filter = (df['yield_ann_cost_basis'] > 0.15) & (df['p_assign'] < 0.30) & (df['volume'] > 50)
+    loose_filter = (df['yield_ann_cost_basis'] > 0.10) & (df['p_assign'] < 0.40) & (df['volume'] > 20)
+    
+    if strict_filter.any():
+        recommendations = df[strict_filter].sort_values('yield_ann_cost_basis', ascending=False)
+        st.success(f"找到 {len(recommendations)} 个符合严格条件的推荐期权！")
+        st.markdown("**筛选条件**: 年化收益率 > 15%，被指派概率 < 30%，成交量 > 50")
+    elif loose_filter.any():
+        recommendations = df[loose_filter].sort_values('yield_ann_cost_basis', ascending=False)
+        st.warning(f"严格条件下未找到推荐，放宽条件后找到 {len(recommendations)} 个推荐期权")
+        st.markdown("**筛选条件**: 年化收益率 > 10%，被指派概率 < 40%，成交量 > 20")
+    else:
+        st.info("当前筛选条件下未找到符合条件的推荐期权，建议调整参数或查看下方完整列表。")
+        recommendations = df.head(5)  # 显示前5个作为参考
+    
+    # 显示推荐期权
+    for idx, (_, rec) in enumerate(recommendations.head(3).iterrows(), 1):
+        st.markdown(f"### 推荐 #{idx}: {symbol} {rec['strike']:.0f}C")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric(
+                "年化收益率", 
+                f"{rec['yield_ann_cost_basis']*100:.1f}%",
+                help="基于持仓成本的年化收益率"
+            )
+            st.caption(f"现价: ${current_price:.2f}")
+        
+        with col2:
+            st.metric(
+                "被指派概率", 
+                f"{rec['p_assign']*100:.1f}%",
+                help="到期被要求卖出股票的概率"
+            )
+            st.caption(f"执行价: ${rec['strike']:.2f}")
+        
+        with col3:
+            st.metric(
+                "权利金", 
+                f"${rec['mid']:.2f}",
+                help="每份期权的收入"
+            )
+            st.caption(f"盈亏平衡: ${rec['breakeven']:.2f}")
+        
+        with col4:
+            st.metric(
+                "到期时间", 
+                f"{rec['dte']}天",
+                help="距离期权到期的时间"
+            )
+            st.caption(f"到期日: {rec['expiration']}")
+        
+        # 计算总收益
+        total_premium = rec['mid'] * shares
+        st.info(f"**总权利金收入**: ${total_premium:.2f} (${shares} 股 × ${rec['mid']:.2f})")
+        
+        st.markdown("---")
+    
+    # 显示完整期权列表
+    st.subheader("📋 完整期权列表")
+    
+    display = df.copy()
+    display["yield_ann_cost_basis"] = display["yield_ann_cost_basis"].apply(format_percentage)
+    display["yield_ann_cash"] = display["yield_ann_cash"].apply(format_percentage)
+    display["p_assign"] = display["p_assign"].apply(format_percentage)
+    display["p_touch"] = display["p_touch"].apply(format_percentage)
+    display["mid"] = display["mid"].apply(format_currency)
+    display["premium_contract"] = display["premium_contract"].apply(format_currency)
+    display["breakeven"] = display["breakeven"].apply(format_currency)
+    display["iv"] = display["iv"].apply(lambda v: f"{v*100:.2f}%" if np.isfinite(v) else "—")
+    display["delta_call"] = display["delta_call"].apply(lambda v: f"{v:.3f}" if np.isfinite(v) else "—")
+    
+    st.dataframe(
+        display[
+            [
+                "expiration",
+                "dte",
+                "strike",
+                "mid",
+                "premium_contract",
+                "iv",
+                "delta_call",
+                "breakeven",
+                "yield_ann_cost_basis",
+                "yield_ann_cash",
+                "p_assign",
+                "p_touch",
+                "volume",
+                "openInterest",
+                "contractSymbol",
+            ]
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
+    
+    # 添加说明
+    with st.expander("📊 Sell Call 策略说明", expanded=False):
+        st.markdown("""
+        **Covered Call 策略说明：**
+        - **策略原理**: 在持有股票的基础上，卖出看涨期权获得权利金收入
+        - **年化收益率**: 基于您的持仓成本计算，反映相对于投入资金的收益
+        - **被指派概率**: 到期时股价高于执行价，需要以执行价卖出股票的概率
+        - **盈亏平衡点**: 执行价 + 权利金，股价超过此点开始亏损
+        - **最大收益**: 权利金收入（股价不超过执行价时）
+        - **最大风险**: 股价大幅上涨时，只能以执行价卖出，错失上涨收益
+        
+        **适用场景：**
+        - 对股票长期看好，但短期内预期涨幅有限
+        - 希望通过期权增加持仓收益
+        - 愿意承担股价上涨时被提前卖出的风险
+        
+        **风险提示：**
+        - 股价大幅上涨时，收益被限制在执行价
+        - 被指派后需要以执行价卖出股票
+        - 期权交易具有时间价值衰减风险
+        """)
+
 def main() -> None:
     st.set_page_config(page_title="luluwangzi的期权策略", layout="wide")
     
     # 添加侧边栏导航
     with st.sidebar:
         st.title("🧭 导航")
-        page = st.selectbox("选择页面", ["主页", "强烈推荐", "关于"])
+        page = st.selectbox("选择页面", ["主页", "强烈推荐", "Sell Call", "关于"])
     
     if page == "关于":
         show_about_page()
     elif page == "强烈推荐":
         analyze_nasdaq100_recommendations()
+    elif page == "Sell Call":
+        show_sell_call_page()
     else:  # 主页
         st.title("luluwangzi的期权策略")
         
