@@ -596,7 +596,7 @@ def analyze_nasdaq100_recommendations():
                 symbol=symbol,
                 spot=spot,
                 expirations=exps,
-                dte_min=7,
+                dte_min=1,
                 dte_max=45,
                 target_delta_abs_min=0.10,
                 target_delta_abs_max=0.40,
@@ -702,7 +702,7 @@ def show_sell_call_page():
         years = st.slider("历史回看年数", min_value=1, max_value=10, value=2, step=1)
         rf = st.number_input("无风险利率 r（年化）", min_value=0.0, max_value=0.20, value=0.045, step=0.005, format="%.3f")
         q = st.number_input("股息率 q（年化）", min_value=0.0, max_value=0.10, value=0.0, step=0.005, format="%.3f")
-        dte_range = st.slider("到期天数范围（DTE）", min_value=1, max_value=365, value=(7, 45), step=1)
+        dte_range = st.slider("到期天数范围（DTE）", min_value=1, max_value=365, value=(1, 45), step=1)
         delta_abs_range = st.slider("目标 |Delta| 范围（卖出看涨）", min_value=0.01, max_value=0.95, value=(0.05, 0.95), step=0.01)
         st.caption("注：Delta 为看涨期权的绝对值筛选区间")
     
@@ -913,7 +913,7 @@ def main() -> None:
             years = st.slider("历史回看年数", min_value=3, max_value=25, value=10, step=1)
             rf = st.number_input("无风险利率 r（年化）", min_value=0.0, max_value=0.20, value=0.045, step=0.005, format="%.3f")
             q = st.number_input("股息率 q（年化，近似）", min_value=0.0, max_value=0.10, value=0.0, step=0.005, format="%.3f")
-            dte_range = st.slider("到期天数范围（DTE）", min_value=1, max_value=365, value=(7, 45), step=1)
+            dte_range = st.slider("到期天数范围（DTE）", min_value=1, max_value=365, value=(1, 45), step=1)
             delta_abs_range = st.slider("目标 |Delta| 范围（卖出看跌）", min_value=0.01, max_value=0.95, value=(0.15, 0.35), step=0.01)
             st.caption("注：Delta 为看跌期权的绝对值筛选区间")
 
