@@ -562,6 +562,13 @@ def analyze_nasdaq100_recommendations():
     st.subheader("🔥 强烈推荐买入")
     st.markdown("基于纳斯达克100成分股分析，筛选年化收益率>25%且被指派概率<30%的期权")
     
+    # 添加筛选参数
+    with st.sidebar:
+        st.header("筛选参数")
+        dte_range = st.slider("到期天数范围（DTE）", min_value=1, max_value=365, value=(1, 45), step=1)
+        max_stocks = st.slider("分析股票数量", min_value=5, max_value=50, value=20, step=5)
+        st.caption("分析更多股票会需要更长时间")
+    
     # 获取纳斯达克100股票列表
     stocks = get_nasdaq100_stocks()
     
@@ -572,9 +579,11 @@ def analyze_nasdaq100_recommendations():
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    for i, symbol in enumerate(stocks[:20]):  # 限制前20只股票以节省时间
+    dte_min, dte_max = dte_range
+    
+    for i, symbol in enumerate(stocks[:max_stocks]):  # 使用用户设置的数量
         status_text.text(f"正在分析 {symbol}...")
-        progress_bar.progress((i + 1) / 20)
+        progress_bar.progress((i + 1) / max_stocks)
         
         try:
             # 获取期权数据
@@ -596,8 +605,8 @@ def analyze_nasdaq100_recommendations():
                 symbol=symbol,
                 spot=spot,
                 expirations=exps,
-                dte_min=1,
-                dte_max=45,
+                dte_min=dte_min,
+                dte_max=dte_max,
                 target_delta_abs_min=0.10,
                 target_delta_abs_max=0.40,
                 risk_free_rate=0.045,
