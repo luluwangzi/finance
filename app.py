@@ -363,17 +363,24 @@ def main() -> None:
     with col2:
         st.metric("最大回撤", format_percentage(mdd.max_drawdown_pct))
     with col3:
+        # 历史最高价显示
         if hist_high_days_ago <= 730:  # 24个月内
-            st.metric("历史最高价", f"{hist_high_days_ago}天前", help=f"历史最高价 ${hist_high_price:.2f}")
+            time_str = f"{hist_high_days_ago}天前"
         else:
-            st.metric("历史最高价", f"{hist_high_days_ago//365}年前", help=f"历史最高价 ${hist_high_price:.2f}")
+            time_str = f"{hist_high_days_ago//365}年前"
+        st.metric("历史最高价", f"${hist_high_price:.2f}", delta=time_str, help=f"历史最高价: ${hist_high_price:.2f} ({hist_high_date.strftime('%Y-%m-%d')})")
     with col4:
-        if mdd.trough_date:
-            days_ago = (datetime.now(timezone.utc) - mdd.trough_date).days
-            if days_ago <= 730:  # 24个月内
-                st.metric("最大回撤低点", f"{days_ago}天前", help="最大回撤达到最低点的日期")
+        # 最大回撤低点显示
+        if mdd.trough_date and mdd.peak_date:
+            trough_days_ago = (datetime.now(timezone.utc) - mdd.trough_date).days
+            if trough_days_ago <= 730:  # 24个月内
+                time_str = f"{trough_days_ago}天前"
             else:
-                st.metric("最大回撤低点", f"{days_ago//365}年前", help="最大回撤达到最低点的日期")
+                time_str = f"{trough_days_ago//365}年前"
+            
+            peak_price = hist.loc[mdd.peak_date, 'Close']
+            trough_price = hist.loc[mdd.trough_date, 'Close']
+            st.metric("最大回撤低点", f"${trough_price:.2f}", delta=time_str, help=f"从${peak_price:.2f}回撤到${trough_price:.2f} ({mdd.trough_date.strftime('%Y-%m-%d')})")
         else:
             st.metric("最大回撤低点", "—")
 
@@ -385,8 +392,13 @@ def main() -> None:
         **历史数据指标说明：**
         - **现价**: 当前股票市场价格
         - **最大回撤**: 历史上从某个峰值到谷值的最大跌幅百分比
-        - **历史最高价**: 整个历史期间的最高价格及其时间
-        - **最大回撤低点**: 最大回撤达到最低点的相对时间
+        - **历史最高价**: 显示价格和时间，整个历史期间的最高价格
+        - **最大回撤低点**: 显示价格和时间，以及从哪个峰值回撤而来
+        
+        **显示格式说明：**
+        - 主值显示价格（如 $183.15）
+        - Delta显示相对时间（如 "30天前"）
+        - 悬停提示显示完整信息（价格、具体日期、回撤详情）
         
         **重要区别：**
         - **历史最高价** ≠ **最大回撤的峰值**
