@@ -183,7 +183,12 @@ def analyze_calls(
     rows: List[dict] = []
     
     for exp_str in expirations:
-        exp = datetime.fromisoformat(exp_str.replace("Z", "+00:00"))
+        # 处理时区问题：确保exp也有时区信息
+        if exp_str.endswith("Z"):
+            exp = datetime.fromisoformat(exp_str.replace("Z", "+00:00"))
+        else:
+            # 如果没有时区信息，假设为UTC
+            exp = datetime.fromisoformat(exp_str).replace(tzinfo=timezone.utc)
         dte = (exp - now_utc).days
         if dte < dte_min or dte > dte_max:
             continue
@@ -210,6 +215,10 @@ def analyze_calls(
                 iv = row["impliedVolatility"]
                 volume = row["volume"]
                 open_interest = row["openInterest"]
+                
+                # 处理成交量为NaN的情况
+                if pd.isna(volume):
+                    volume = 0
                 
                 if mid <= 0 or not np.isfinite(iv) or iv <= 0:
                     continue
@@ -694,7 +703,7 @@ def show_sell_call_page():
         rf = st.number_input("无风险利率 r（年化）", min_value=0.0, max_value=0.20, value=0.045, step=0.005, format="%.3f")
         q = st.number_input("股息率 q（年化）", min_value=0.0, max_value=0.10, value=0.0, step=0.005, format="%.3f")
         dte_range = st.slider("到期天数范围（DTE）", min_value=1, max_value=365, value=(7, 45), step=1)
-        delta_abs_range = st.slider("目标 |Delta| 范围（卖出看涨）", min_value=0.01, max_value=0.95, value=(0.15, 0.35), step=0.01)
+        delta_abs_range = st.slider("目标 |Delta| 范围（卖出看涨）", min_value=0.01, max_value=0.95, value=(0.05, 0.95), step=0.01)
         st.caption("注：Delta 为看涨期权的绝对值筛选区间")
     
     # 获取当前股价
