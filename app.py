@@ -679,7 +679,7 @@ def analyze_nasdaq100_recommendations():
                 expirations=exps,
                 dte_min=dte_min,
                 dte_max=dte_max,
-                target_delta_abs_min=0.01,
+                target_delta_abs_min=0.0,  # 移除Delta下限，允许所有价外期权
                 target_delta_abs_max=0.99,
                 risk_free_rate=0.045,
                 dividend_yield=0.0,
