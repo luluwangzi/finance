@@ -386,7 +386,7 @@ def analyze_puts(
             original_iv = float(r.get("impliedVolatility", np.nan))
             
             # 如果IV数据有问题（太小或太大），使用历史波动率
-            if not np.isfinite(original_iv) or original_iv <= 0.01 or original_iv > 5.0:
+            if not np.isfinite(original_iv) or original_iv <= 0.05 or original_iv > 5.0:
                 iv = calculate_historical_volatility(symbol, 30)
             else:
                 iv = original_iv
