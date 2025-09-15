@@ -474,8 +474,8 @@ def get_yield_priority_recommendations(df: pd.DataFrame, top_n: int = 3) -> pd.D
     基于收益优先策略获取推荐期权
     筛选条件：
     1. 年化收益率 > 15%
-    2. 被指派概率 < 30%
-    3. 成交量 > 100
+    2. 被指派概率 < 40% (与强烈推荐页面保持一致)
+    3. 成交量 > 50 (与强烈推荐页面保持一致)
     4. 按年化收益率排序
     """
     if df.empty:
@@ -484,16 +484,16 @@ def get_yield_priority_recommendations(df: pd.DataFrame, top_n: int = 3) -> pd.D
     # 筛选条件
     filtered = df[
         (df['yield_ann_cash'] > 0.15) &  # 年化收益率 > 15%
-        (df['p_assign'] < 0.30) &        # 被指派概率 < 30%
-        (df['volume'] > 100)             # 成交量 > 100
+        (df['p_assign'] < 0.40) &        # 被指派概率 < 40% (调整阈值)
+        (df['volume'] > 50)              # 成交量 > 50 (调整阈值)
     ].copy()
     
     if filtered.empty:
         # 如果严格筛选没有结果，放宽条件
         filtered = df[
             (df['yield_ann_cash'] > 0.10) &  # 年化收益率 > 10%
-            (df['p_assign'] < 0.40) &        # 被指派概率 < 40%
-            (df['volume'] > 50)              # 成交量 > 50
+            (df['p_assign'] < 0.50) &        # 被指派概率 < 50%
+            (df['volume'] > 20)              # 成交量 > 20
         ].copy()
     
     # 按年化收益率降序排序
@@ -1147,7 +1147,7 @@ def main() -> None:
         
         if not recommendations.empty:
             st.success(f"基于收益优先策略，为您推荐以下 {len(recommendations)} 个最优期权：")
-            st.markdown("**筛选条件**: 年化收益率 > 15%，被指派概率 < 30%，成交量 > 100")
+            st.markdown("**筛选条件**: 年化收益率 > 15%，被指派概率 < 40%，成交量 > 50")
             
             for idx, (_, rec) in enumerate(recommendations.iterrows(), 1):
                 st.markdown(f"### 推荐 #{idx}")
