@@ -143,6 +143,25 @@ def fetch_put_chain(symbol: str, expiration: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def calculate_historical_volatility(symbol: str, days: int = 30) -> float:
+    """计算历史波动率作为IV的替代"""
+    try:
+        tk = yf.Ticker(symbol)
+        hist = tk.history(period=f"{days}d")
+        
+        if hist.empty:
+            return 0.25  # 默认波动率25%
+        
+        # 计算日收益率
+        returns = hist['Close'].pct_change().dropna()
+        
+        # 计算年化波动率
+        volatility = returns.std() * np.sqrt(252)
+        
+        return float(volatility)
+    except:
+        return 0.25  # 默认波动率25%
+
 def estimate_spot_price(symbol: str, hist: Optional[pd.DataFrame]) -> Optional[float]:
     try:
         tk = yf.Ticker(symbol)
@@ -364,9 +383,16 @@ def analyze_puts(
 
         for _, r in puts.iterrows():
             strike = float(r.get("strike"))
-            iv = float(r.get("impliedVolatility", np.nan))
+            original_iv = float(r.get("impliedVolatility", np.nan))
+            
+            # 如果IV数据有问题（太小或太大），使用历史波动率
+            if not np.isfinite(original_iv) or original_iv <= 0.01 or original_iv > 5.0:
+                iv = calculate_historical_volatility(symbol, 30)
+            else:
+                iv = original_iv
+                
             mprice = mid_price(r)
-            if not np.isfinite(iv) or iv <= 0 or mprice is None:
+            if mprice is None:
                 continue
             t_years = max(1.0 / 365.0, dte / 365.0)
             delta_put = compute_delta_put(spot, strike, t_years, iv, risk_free_rate, dividend_yield)
@@ -632,7 +658,7 @@ def analyze_nasdaq100_recommendations():
         last_trading_day = get_last_trading_day()
         st.caption(f"数据来源: {last_trading_day.strftime('%Y-%m-%d')} (上个交易日)")
     
-    st.markdown("基于纳斯达克100成分股分析，筛选年化收益率>25%且被指派概率<30%的期权")
+    st.markdown("基于纳斯达克100成分股分析，筛选年化收益率>25%且被指派概率<40%的期权")
     
     # 添加筛选参数
     with st.sidebar:
@@ -691,7 +717,7 @@ def analyze_nasdaq100_recommendations():
             # 筛选符合条件的期权
             filtered = df[
                 (df['yield_ann_cash'] > 0.25) &  # 年化收益率 > 25%
-                (df['p_assign'] < 0.30) &        # 被指派概率 < 30%
+                (df['p_assign'] < 0.40) &        # 被指派概率 < 40% (调整阈值)
                 (df['volume'] > 50)              # 成交量 > 50
             ]
             
