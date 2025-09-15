@@ -10,7 +10,42 @@ import streamlit as st
 import yfinance as yf
 from dateutil import tz
 from scipy.stats import norm
+import pytz
 
+
+# ---------------------------
+# Trading hours utilities
+# ---------------------------
+
+def is_market_open() -> bool:
+    """检查当前是否在交易时段"""
+    now_est = datetime.now(pytz.timezone('US/Eastern'))
+    weekday = now_est.weekday()  # 0=Monday, 6=Sunday
+    
+    # 检查是否是工作日
+    if weekday >= 5:  # Saturday or Sunday
+        return False
+    
+    # 检查是否在交易时段 (9:30 AM - 4:00 PM EST)
+    market_open = now_est.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
+    
+    return market_open <= now_est <= market_close
+
+def get_last_trading_day() -> datetime:
+    """获取上个交易日"""
+    now_est = datetime.now(pytz.timezone('US/Eastern'))
+    
+    # 如果是周一，返回上周五
+    if now_est.weekday() == 0:  # Monday
+        days_back = 3
+    # 如果是周末，返回上周五
+    elif now_est.weekday() >= 5:  # Saturday or Sunday
+        days_back = now_est.weekday() - 4
+    else:
+        days_back = 1
+    
+    return now_est - timedelta(days=days_back)
 
 # ---------------------------
 # Data models
@@ -79,6 +114,25 @@ def fetch_option_expirations(symbol: str) -> List[str]:
 def fetch_put_chain(symbol: str, expiration: str) -> pd.DataFrame:
     try:
         tk = yf.Ticker(symbol)
+        
+        # 如果不在交易时段，尝试使用历史数据
+        if not is_market_open():
+            # 获取上个交易日的数据
+            last_trading_day = get_last_trading_day()
+            try:
+                # 使用历史数据获取期权链
+                hist_data = tk.history(start=last_trading_day.date(), end=(last_trading_day + timedelta(days=1)).date())
+                if not hist_data.empty:
+                    # 使用历史数据，但期权链可能不完整
+                    chain = tk.option_chain(expiration)
+                    puts = chain.puts.copy()
+                    if "impliedVolatility" in puts.columns:
+                        puts["impliedVolatility"] = puts["impliedVolatility"].astype(float)
+                    return puts
+            except Exception:
+                pass
+        
+        # 正常获取当前期权链
         chain = tk.option_chain(expiration)
         puts = chain.puts.copy()
         # Normalize column names
@@ -92,12 +146,21 @@ def fetch_put_chain(symbol: str, expiration: str) -> pd.DataFrame:
 def estimate_spot_price(symbol: str, hist: Optional[pd.DataFrame]) -> Optional[float]:
     try:
         tk = yf.Ticker(symbol)
+        
+        # 如果不在交易时段，优先使用历史数据
+        if not is_market_open():
+            if hist is not None and not hist.empty:
+                return float(hist["Close"].iloc[-1])
+        
+        # 尝试获取实时价格
         fast = getattr(tk, "fast_info", {}) or {}
         last = fast.get("lastPrice") if isinstance(fast, dict) else None
         if last is not None and np.isfinite(last):
             return float(last)
     except Exception:
         pass
+    
+    # 回退到历史数据
     if hist is not None and not hist.empty:
         return float(hist["Close"].iloc[-1])
     return None
@@ -560,6 +623,15 @@ def get_nasdaq100_stocks():
 def analyze_nasdaq100_recommendations():
     """分析纳斯达克100成分股，找出强烈推荐的期权"""
     st.subheader("🔥 强烈推荐买入")
+    
+    # 显示交易时段状态
+    if is_market_open():
+        st.success("✅ 当前在交易时段，使用实时数据")
+    else:
+        st.warning("⚠️ 当前不在交易时段，使用上个交易日数据")
+        last_trading_day = get_last_trading_day()
+        st.caption(f"数据来源: {last_trading_day.strftime('%Y-%m-%d')} (上个交易日)")
+    
     st.markdown("基于纳斯达克100成分股分析，筛选年化收益率>25%且被指派概率<30%的期权")
     
     # 添加筛选参数
