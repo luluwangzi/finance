@@ -11,6 +11,7 @@ import yfinance as yf
 from dateutil import tz
 from scipy.stats import norm
 import pytz
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 # ---------------------------
@@ -661,79 +662,80 @@ def analyze_nasdaq100_recommendations():
         st.caption("分析更多股票会需要更长时间")
     
     # 获取纳斯达克100股票列表
-    stocks = get_nasdaq100_stocks()
-    
+    stocks = get_nasdaq100_stocks()[:max_stocks]
+
     # 存储推荐结果
     recommendations = []
-    
+
     # 显示进度条
     progress_bar = st.progress(0)
     status_text = st.empty()
-    
+
     dte_min, dte_max = dte_range
-    
-    for i, symbol in enumerate(stocks[:max_stocks]):  # 使用用户设置的数量
-        status_text.text(f"正在分析 {symbol}...")
-        progress_bar.progress((i + 1) / max_stocks)
-        
+
+    def compute_best_for_symbol(symbol: str):
         try:
-            # 获取期权数据
             exps = fetch_option_expirations(symbol)
             if not exps:
-                continue
-                
-            # 获取历史数据
+                return None
             hist = fetch_price_history(symbol, 2)
             if hist.empty:
-                continue
-                
+                return None
             spot = estimate_spot_price(symbol, hist)
             if spot is None:
-                continue
-            
-            # 分析期权
+                return None
             df = analyze_puts(
                 symbol=symbol,
                 spot=spot,
                 expirations=exps,
                 dte_min=dte_min,
                 dte_max=dte_max,
-                target_delta_abs_min=0.0,  # 移除Delta下限，允许所有价外期权
+                target_delta_abs_min=0.0,
                 target_delta_abs_max=0.99,
                 risk_free_rate=0.045,
                 dividend_yield=0.0,
             )
-            
             if df.empty:
-                continue
-            
-            # 筛选符合条件的期权
+                return None
             filtered = df[
-                (df['yield_ann_cash'] > 0.25) &  # 年化收益率 > 25%
-                (df['p_assign'] < 0.40) &        # 被指派概率 < 40% (调整阈值)
-                (df['volume'] > 50)              # 成交量 > 50
+                (df['yield_ann_cash'] > 0.25) &
+                (df['p_assign'] < 0.40) &
+                (df['volume'] > 50)
             ]
-            
-            if not filtered.empty:
-                # 取最佳推荐
-                best = filtered.sort_values('yield_ann_cash', ascending=False).iloc[0]
-                recommendations.append({
-                    'symbol': symbol,
-                    'spot': spot,
-                    'strike': best['strike'],
-                    'expiration': best['expiration'],
-                    'dte': best['dte'],
-                    'yield_ann': best['yield_ann_cash'],
-                    'p_assign': best['p_assign'],
-                    'premium': best['mid'],
-                    'breakeven': best['breakeven'],
-                    'delta': best['delta_put'],
-                    'volume': best['volume']
-                })
-                
-        except Exception as e:
-            continue
-    
+            if filtered.empty:
+                return None
+            best = filtered.sort_values('yield_ann_cash', ascending=False).iloc[0]
+            return {
+                'symbol': symbol,
+                'spot': spot,
+                'strike': best['strike'],
+                'expiration': best['expiration'],
+                'dte': best['dte'],
+                'yield_ann': best['yield_ann_cash'],
+                'p_assign': best['p_assign'],
+                'premium': best['mid'],
+                'breakeven': best['breakeven'],
+                'delta': best['delta_put'],
+                'volume': best['volume']
+            }
+        except Exception:
+            return None
+
+    max_workers = min(12, len(stocks)) if stocks else 0
+    if max_workers > 0:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_symbol = {executor.submit(compute_best_for_symbol, s): s for s in stocks}
+            for idx, future in enumerate(as_completed(future_to_symbol), 1):
+                symbol = future_to_symbol[future]
+                status_text.text(f"正在分析 {symbol}...")
+                try:
+                    result = future.result()
+                    if result is not None:
+                        recommendations.append(result)
+                except Exception:
+                    pass
+                progress_bar.progress(idx / len(stocks))
+
     progress_bar.empty()
     status_text.empty()
     
