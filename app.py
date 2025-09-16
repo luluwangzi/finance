@@ -111,7 +111,7 @@ def fetch_option_expirations(symbol: str) -> List[str]:
         return []
 
 
-@st.cache_data(show_spinner=False, ttl=60)
+@st.cache_data(show_spinner=False, ttl=5)
 def fetch_put_chain(symbol: str, expiration: str) -> pd.DataFrame:
     try:
         tk = yf.Ticker(symbol)
@@ -716,6 +716,10 @@ def analyze_nasdaq100_recommendations():
         dte_range = st.slider("到期天数范围（DTE）", min_value=1, max_value=365, value=(1, 45), step=1)
         max_stocks = st.slider("分析股票数量", min_value=5, max_value=50, value=20, step=5)
         st.caption("分析更多股票会需要更长时间")
+        if st.button("🔄 刷新期权数据", help="清空缓存并重新获取最新期权价格", use_container_width=True):
+            fetch_put_chain.clear()
+            st.success("已刷新，将重新获取最新数据")
+            st.rerun()
     
     # 获取纳斯达克100股票列表
     stocks = get_nasdaq100_stocks()
@@ -833,6 +837,10 @@ def show_sell_call_page():
         dte_range = st.slider("到期天数范围（DTE）", min_value=1, max_value=365, value=(1, 45), step=1)
         delta_abs_range = st.slider("目标 |Delta| 范围（卖出看涨）", min_value=0.01, max_value=0.95, value=(0.05, 0.95), step=0.01)
         st.caption("注：Delta 为看涨期权的绝对值筛选区间")
+        if st.button("🔄 刷新期权数据", help="清空缓存并重新获取最新期权价格", use_container_width=True, key="refresh_calls"):
+            fetch_put_chain.clear()
+            st.success("已刷新，将重新获取最新数据")
+            st.rerun()
     
     # 获取当前股价（始终使用最新数据）
     try:
@@ -1060,6 +1068,10 @@ def main() -> None:
             dte_range = st.slider("到期天数范围（DTE）", min_value=1, max_value=365, value=(1, 45), step=1)
             delta_abs_range = st.slider("目标 |Delta| 范围（卖出看跌）", min_value=0.01, max_value=0.95, value=(0.15, 0.35), step=0.01)
             st.caption("注：Delta 为看跌期权的绝对值筛选区间")
+            if st.button("🔄 刷新期权数据", help="清空缓存并重新获取最新期权价格", use_container_width=True, key="refresh_puts"):
+                fetch_put_chain.clear()
+                st.success("已刷新，将重新获取最新数据")
+                st.rerun()
 
         # Price history and MDD
         hist = fetch_price_history(symbol, years)
