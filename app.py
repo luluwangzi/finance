@@ -114,25 +114,7 @@ def fetch_option_expirations(symbol: str) -> List[str]:
 def fetch_put_chain(symbol: str, expiration: str) -> pd.DataFrame:
     try:
         tk = yf.Ticker(symbol)
-        
-        # 如果不在交易时段，尝试使用历史数据
-        if not is_market_open():
-            # 获取上个交易日的数据
-            last_trading_day = get_last_trading_day()
-            try:
-                # 使用历史数据获取期权链
-                hist_data = tk.history(start=last_trading_day.date(), end=(last_trading_day + timedelta(days=1)).date())
-                if not hist_data.empty:
-                    # 使用历史数据，但期权链可能不完整
-                    chain = tk.option_chain(expiration)
-                    puts = chain.puts.copy()
-                    if "impliedVolatility" in puts.columns:
-                        puts["impliedVolatility"] = puts["impliedVolatility"].astype(float)
-                    return puts
-            except Exception:
-                pass
-        
-        # 正常获取当前期权链
+        # 始终获取当前期权链（不再回退到上个交易日）
         chain = tk.option_chain(expiration)
         puts = chain.puts.copy()
         # Normalize column names
@@ -165,13 +147,7 @@ def calculate_historical_volatility(symbol: str, days: int = 30) -> float:
 def estimate_spot_price(symbol: str, hist: Optional[pd.DataFrame]) -> Optional[float]:
     try:
         tk = yf.Ticker(symbol)
-        
-        # 如果不在交易时段，优先使用历史数据
-        if not is_market_open():
-            if hist is not None and not hist.empty:
-                return float(hist["Close"].iloc[-1])
-        
-        # 尝试获取实时价格
+        # 优先尝试获取实时价格（不区分交易时段）
         fast = getattr(tk, "fast_info", {}) or {}
         last = fast.get("lastPrice") if isinstance(fast, dict) else None
         if last is not None and np.isfinite(last):
@@ -179,7 +155,7 @@ def estimate_spot_price(symbol: str, hist: Optional[pd.DataFrame]) -> Optional[f
     except Exception:
         pass
     
-    # 回退到历史数据
+    # 回退到传入的历史数据
     if hist is not None and not hist.empty:
         return float(hist["Close"].iloc[-1])
     return None
@@ -650,13 +626,8 @@ def analyze_nasdaq100_recommendations():
     """分析纳斯达克100成分股，找出强烈推荐的期权"""
     st.subheader("🔥 强烈推荐买入")
     
-    # 显示交易时段状态
-    if is_market_open():
-        st.success("✅ 当前在交易时段，使用实时数据")
-    else:
-        st.warning("⚠️ 当前不在交易时段，使用上个交易日数据")
-        last_trading_day = get_last_trading_day()
-        st.caption(f"数据来源: {last_trading_day.strftime('%Y-%m-%d')} (上个交易日)")
+    # 始终提示使用最新数据
+    st.success("✅ 使用当前接口获取的最新数据")
     
     st.markdown("基于纳斯达克100成分股分析，筛选年化收益率>25%且被指派概率<40%的期权")
     
