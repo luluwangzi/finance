@@ -152,6 +152,28 @@ def estimate_spot_price(symbol: str, hist: Optional[pd.DataFrame]) -> Optional[f
         last = fast.get("lastPrice") if isinstance(fast, dict) else None
         if last is not None and np.isfinite(last):
             return float(last)
+        
+        # 回退到当日分时数据（1分钟级别）
+        try:
+            intraday = tk.history(period="1d", interval="1m")
+            if intraday is not None and not intraday.empty:
+                close_series = intraday.get("Close")
+                if close_series is not None and not close_series.empty:
+                    last_close = close_series.dropna().iloc[-1]
+                    if np.isfinite(last_close):
+                        return float(last_close)
+        except Exception:
+            pass
+        
+        # 回退到最近日线收盘价
+        try:
+            daily = tk.history(period="1d")
+            if daily is not None and not daily.empty:
+                last_close = daily["Close"].dropna().iloc[-1]
+                if np.isfinite(last_close):
+                    return float(last_close)
+        except Exception:
+            pass
     except Exception:
         pass
     
