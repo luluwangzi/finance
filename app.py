@@ -815,18 +815,18 @@ def show_sell_call_page():
         delta_abs_range = st.slider("目标 |Delta| 范围（卖出看涨）", min_value=0.01, max_value=0.95, value=(0.05, 0.95), step=0.01)
         st.caption("注：Delta 为看涨期权的绝对值筛选区间")
     
-    # 获取当前股价
+    # 获取当前股价（始终使用最新数据）
     try:
         ticker = yf.Ticker(symbol)
         hist = ticker.history(period="1d")
         if hist.empty:
             st.error(f"无法获取 {symbol} 的历史数据")
             return
-        current_price = hist["Close"].iloc[-1]
-        if pd.isna(current_price) or current_price <= 0:
-            st.error(f"获取到的 {symbol} 股价无效: {current_price}")
+        current_price = estimate_spot_price(symbol, hist)
+        if current_price is None or pd.isna(current_price) or current_price <= 0:
+            st.error(f"获取到的 {symbol} 最新股价无效")
             return
-        st.success(f"当前 {symbol} 股价: ${current_price:.2f}")
+        st.success(f"当前 {symbol} 最新股价: ${current_price:.2f}")
         
         # 计算持仓盈亏
         total_cost = cost_basis * shares
