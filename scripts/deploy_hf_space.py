@@ -69,7 +69,7 @@ def main() -> int:
                 break
         except Exception as e:
             print(f"status check error: {e}")
-        time.sleep(5)
+        time.sleep(1)
 
     print(f"If the UI isn't live yet, it will be shortly: {url}")
     return 0

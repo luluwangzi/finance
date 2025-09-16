@@ -11,6 +11,7 @@ import yfinance as yf
 from dateutil import tz
 from scipy.stats import norm
 import pytz
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 # ---------------------------
@@ -644,6 +645,62 @@ def get_nasdaq100_stocks():
     ]
     return nasdaq100_stocks
 
+def _analyze_symbol_recommendation(symbol: str, dte_min: int, dte_max: int) -> Optional[dict]:
+    """并行用：分析单个标的并返回最佳推荐，若无则返回None"""
+    try:
+        exps = fetch_option_expirations(symbol)
+        if not exps:
+            return None
+
+        hist = fetch_price_history(symbol, 2)
+        if hist.empty:
+            return None
+
+        spot = estimate_spot_price(symbol, hist)
+        if spot is None:
+            return None
+
+        df = analyze_puts(
+            symbol=symbol,
+            spot=spot,
+            expirations=exps,
+            dte_min=dte_min,
+            dte_max=dte_max,
+            target_delta_abs_min=0.0,
+            target_delta_abs_max=0.99,
+            risk_free_rate=0.045,
+            dividend_yield=0.0,
+        )
+
+        if df.empty:
+            return None
+
+        filtered = df[
+            (df['yield_ann_cash'] > 0.25) &
+            (df['p_assign'] < 0.40) &
+            (df['volume'] > 50)
+        ]
+
+        if filtered.empty:
+            return None
+
+        best = filtered.sort_values('yield_ann_cash', ascending=False).iloc[0]
+        return {
+            'symbol': symbol,
+            'spot': spot,
+            'strike': best['strike'],
+            'expiration': best['expiration'],
+            'dte': best['dte'],
+            'yield_ann': best['yield_ann_cash'],
+            'p_assign': best['p_assign'],
+            'premium': best['mid'],
+            'breakeven': best['breakeven'],
+            'delta': best['delta_put'],
+            'volume': best['volume']
+        }
+    except Exception:
+        return None
+
 def analyze_nasdaq100_recommendations():
     """分析纳斯达克100成分股，找出强烈推荐的期权"""
     st.subheader("🔥 强烈推荐买入")
@@ -672,67 +729,29 @@ def analyze_nasdaq100_recommendations():
     
     dte_min, dte_max = dte_range
     
-    for i, symbol in enumerate(stocks[:max_stocks]):  # 使用用户设置的数量
-        status_text.text(f"正在分析 {symbol}...")
-        progress_bar.progress((i + 1) / max_stocks)
-        
-        try:
-            # 获取期权数据
-            exps = fetch_option_expirations(symbol)
-            if not exps:
-                continue
-                
-            # 获取历史数据
-            hist = fetch_price_history(symbol, 2)
-            if hist.empty:
-                continue
-                
-            spot = estimate_spot_price(symbol, hist)
-            if spot is None:
-                continue
-            
-            # 分析期权
-            df = analyze_puts(
-                symbol=symbol,
-                spot=spot,
-                expirations=exps,
-                dte_min=dte_min,
-                dte_max=dte_max,
-                target_delta_abs_min=0.0,  # 移除Delta下限，允许所有价外期权
-                target_delta_abs_max=0.99,
-                risk_free_rate=0.045,
-                dividend_yield=0.0,
-            )
-            
-            if df.empty:
-                continue
-            
-            # 筛选符合条件的期权
-            filtered = df[
-                (df['yield_ann_cash'] > 0.25) &  # 年化收益率 > 25%
-                (df['p_assign'] < 0.40) &        # 被指派概率 < 40% (调整阈值)
-                (df['volume'] > 50)              # 成交量 > 50
-            ]
-            
-            if not filtered.empty:
-                # 取最佳推荐
-                best = filtered.sort_values('yield_ann_cash', ascending=False).iloc[0]
-                recommendations.append({
-                    'symbol': symbol,
-                    'spot': spot,
-                    'strike': best['strike'],
-                    'expiration': best['expiration'],
-                    'dte': best['dte'],
-                    'yield_ann': best['yield_ann_cash'],
-                    'p_assign': best['p_assign'],
-                    'premium': best['mid'],
-                    'breakeven': best['breakeven'],
-                    'delta': best['delta_put'],
-                    'volume': best['volume']
-                })
-                
-        except Exception as e:
-            continue
+    total = min(max_stocks, len(stocks))
+    completed = 0
+    progress_bar.progress(0.0)
+    symbols_to_process = stocks[:max_stocks]
+    max_workers = min(16, total if total > 0 else 1)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_symbol = {
+            executor.submit(_analyze_symbol_recommendation, symbol, dte_min, dte_max): symbol
+            for symbol in symbols_to_process
+        }
+
+        for future in as_completed(future_to_symbol):
+            symbol = future_to_symbol[future]
+            completed += 1
+            progress_bar.progress(completed / total)
+            status_text.text(f"已完成 {symbol}")
+            try:
+                result = future.result()
+                if result:
+                    recommendations.append(result)
+            except Exception:
+                pass
     
     progress_bar.empty()
     status_text.empty()
