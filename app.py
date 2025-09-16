@@ -110,7 +110,7 @@ def fetch_option_expirations(symbol: str) -> List[str]:
         return []
 
 
-@st.cache_data(show_spinner=False, ttl=10 * 60)
+@st.cache_data(show_spinner=False, ttl=60)
 def fetch_put_chain(symbol: str, expiration: str) -> pd.DataFrame:
     try:
         tk = yf.Ticker(symbol)
