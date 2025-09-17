@@ -264,13 +264,21 @@ def analyze_calls(
     rows: List[dict] = []
     
     for exp_str in expirations:
-        # 处理时区问题：确保exp也有时区信息
-        if exp_str.endswith("Z"):
-            exp = datetime.fromisoformat(exp_str.replace("Z", "+00:00"))
-        else:
-            # 如果没有时区信息，假设为UTC
-            exp = datetime.fromisoformat(exp_str).replace(tzinfo=timezone.utc)
-        dte = (exp - now_utc).days
+        # 期权在美东时间下午4点到期
+        try:
+            # 解析日期并设置为美东时间下午4点
+            exp_date = datetime.strptime(exp_str, "%Y-%m-%d")
+            exp_et = pytz.timezone('US/Eastern').localize(exp_date.replace(hour=16, minute=0, second=0))
+            exp_utc = exp_et.astimezone(timezone.utc)
+        except:
+            continue
+            
+        # 计算到期天数（向上取整）
+        time_diff = exp_utc - now_utc
+        dte = time_diff.days
+        if time_diff.seconds > 0:
+            dte += 1
+            
         if dte < dte_min or dte > dte_max:
             continue
             
@@ -367,12 +375,22 @@ def analyze_puts(
     rows: List[dict] = []
 
     for exp_str in expirations:
+        # 期权在美东时间下午4点到期
         try:
-            expiry = datetime.strptime(exp_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            # 解析日期并设置为美东时间下午4点
+            exp_date = datetime.strptime(exp_str, "%Y-%m-%d")
+            exp_et = pytz.timezone('US/Eastern').localize(exp_date.replace(hour=16, minute=0, second=0))
+            exp_utc = exp_et.astimezone(timezone.utc)
         except Exception:
             # Some tickers may return non-standard formats, skip them
             continue
-        dte = (expiry - now_utc).days
+            
+        # 计算到期天数（向上取整）
+        time_diff = exp_utc - now_utc
+        dte = time_diff.days
+        if time_diff.seconds > 0:
+            dte += 1
+            
         if dte < dte_min or dte > dte_max:
             continue
 
