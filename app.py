@@ -932,6 +932,11 @@ def show_sell_call_page():
     # 筛选推荐期权
     st.subheader("🎯 推荐 Sell Call 期权")
     
+    # 如果持仓亏损，显示提示
+    if cost_basis > current_price:
+        loss_pct = ((current_price - cost_basis) / cost_basis) * 100
+        st.info(f"💡 您的持仓当前亏损 {abs(loss_pct):.1f}%。已自动调整筛选条件以适应亏损持仓。")
+    
     # 获取被指派概率阈值
     max_p_assign_call = st.sidebar.selectbox(
         "被指派概率筛选",
@@ -942,24 +947,33 @@ def show_sell_call_page():
         key="max_p_assign_call"
     )
     
-    # 筛选条件：年化收益率 > 15%，被指派概率 < 阈值，成交量 > 50
-    strict_filter = (df['yield_ann_cost_basis'] > 0.15) & (df['p_assign'] < max_p_assign_call) & (df['volume'] > 50)
-    loose_filter = (df['yield_ann_cost_basis'] > 0.10) & (df['p_assign'] < min(max_p_assign_call + 0.10, 0.50)) & (df['volume'] > 20)
+    # 筛选条件：调整为更合理的阈值
+    # 对于亏损持仓，降低收益率要求
+    if cost_basis > current_price * 1.2:  # 成本价比当前价高20%以上
+        yield_threshold_strict = 0.05  # 5%
+        yield_threshold_loose = 0.02   # 2%
+    else:
+        yield_threshold_strict = 0.15  # 15%
+        yield_threshold_loose = 0.10   # 10%
+    
+    strict_filter = (df['yield_ann_cost_basis'] > yield_threshold_strict) & (df['p_assign'] < max_p_assign_call) & (df['volume'] > 10)
+    loose_filter = (df['yield_ann_cost_basis'] > yield_threshold_loose) & (df['p_assign'] < min(max_p_assign_call + 0.10, 0.50)) & (df['volume'] > 0)
     
     if strict_filter.any():
         recommendations = df[strict_filter].sort_values('yield_ann_cost_basis', ascending=False)
         st.success(f"找到 {len(recommendations)} 个符合严格条件的推荐期权！")
-        st.markdown(f"**筛选条件**: 年化收益率 > 15%，被指派概率 < {int(max_p_assign_call*100)}%，成交量 > 50")
+        st.markdown(f"**筛选条件**: 年化收益率 > {int(yield_threshold_strict*100)}%，被指派概率 < {int(max_p_assign_call*100)}%，成交量 > 10")
     elif loose_filter.any():
         recommendations = df[loose_filter].sort_values('yield_ann_cost_basis', ascending=False)
         st.warning(f"严格条件下未找到推荐，放宽条件后找到 {len(recommendations)} 个推荐期权")
-        st.markdown(f"**筛选条件**: 年化收益率 > 10%，被指派概率 < {int(min(max_p_assign_call + 0.10, 0.50)*100)}%，成交量 > 20")
+        st.markdown(f"**筛选条件**: 年化收益率 > {int(yield_threshold_loose*100)}%，被指派概率 < {int(min(max_p_assign_call + 0.10, 0.50)*100)}%，成交量 > 0")
     else:
         st.info("当前筛选条件下未找到符合条件的推荐期权，建议调整参数或查看下方完整列表。")
         recommendations = df.head(5)  # 显示前5个作为参考
     
     # 显示推荐期权
     if not recommendations.empty:
+        # 添加基于当前价格的年化收益率供参考
         for idx, (_, rec) in enumerate(recommendations.head(3).iterrows(), 1):
             st.markdown(f"### 推荐 #{idx}: {symbol} {rec['strike']:.0f}C")
             
@@ -971,7 +985,9 @@ def show_sell_call_page():
                     f"{rec['yield_ann_cost_basis']*100:.1f}%",
                     help="基于持仓成本的年化收益率"
                 )
+                yield_on_current = (rec['mid'] / current_price) * (365 / rec['dte'])
                 st.caption(f"现价: ${current_price:.2f}")
+                st.caption(f"基于现价收益率: {yield_on_current*100:.1f}%")
             
             with col2:
                 st.metric(
@@ -1056,6 +1072,7 @@ def show_sell_call_page():
         - 对股票长期看好，但短期内预期涨幅有限
         - 希望通过期权增加持仓收益
         - 愿意承担股价上涨时被提前卖出的风险
+        - 亏损持仓可通过卖出看涨期权降低成本基础
         
         **风险提示：**
         - 股价大幅上涨时，收益被限制在执行价
