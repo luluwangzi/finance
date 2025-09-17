@@ -501,15 +501,15 @@ def get_yield_priority_recommendations(df: pd.DataFrame, top_n: int = 3) -> pd.D
     # 筛选条件
     filtered = df[
         (df['yield_ann_cash'] > 0.15) &  # 年化收益率 > 15%
-        (df['p_assign'] < 0.40) &        # 被指派概率 < 40% (调整阈值)
-        (df['volume'] > 50)              # 成交量 > 50 (调整阈值)
+        (df['p_assign'] < 0.30) &        # 被指派概率 < 30%
+        (df['volume'] > 50)              # 成交量 > 50
     ].copy()
     
     if filtered.empty:
         # 如果严格筛选没有结果，放宽条件
         filtered = df[
             (df['yield_ann_cash'] > 0.10) &  # 年化收益率 > 10%
-            (df['p_assign'] < 0.50) &        # 被指派概率 < 50%
+            (df['p_assign'] < 0.40) &        # 被指派概率 < 40%
             (df['volume'] > 20)              # 成交量 > 20
         ].copy()
     
@@ -695,7 +695,7 @@ def _analyze_symbol_recommendation(symbol: str, dte_min: int, dte_max: int) -> O
 
         filtered = df[
             (df['yield_ann_cash'] > 0.25) &
-            (df['p_assign'] < 0.40) &
+            (df['p_assign'] < 0.30) &
             (df['volume'] > 50)
         ]
 
@@ -726,7 +726,7 @@ def analyze_nasdaq100_recommendations():
     # 始终提示使用最新数据
     st.success("✅ 使用当前接口获取的最新数据")
     
-    st.markdown("基于纳斯达克100成分股分析，筛选年化收益率>25%且被指派概率<40%的期权")
+    st.markdown("基于纳斯达克100成分股分析，筛选年化收益率>25%且被指派概率<30%的期权")
     
     # 添加筛选参数
     with st.sidebar:
@@ -1189,7 +1189,7 @@ def main() -> None:
         
         if not recommendations.empty:
             st.success(f"基于收益优先策略，为您推荐以下 {len(recommendations)} 个最优期权：")
-            st.markdown("**筛选条件**: 年化收益率 > 15%，被指派概率 < 40%，成交量 > 50")
+            st.markdown("**筛选条件**: 年化收益率 > 15%，被指派概率 < 30%，成交量 > 50")
             
             for idx, (_, rec) in enumerate(recommendations.iterrows(), 1):
                 st.markdown(f"### 推荐 #{idx}")
