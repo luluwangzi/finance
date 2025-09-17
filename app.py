@@ -486,12 +486,12 @@ def plot_price_and_drawdown(hist: pd.DataFrame, drawdown: pd.Series) -> go.Figur
     return fig
 
 
-def get_yield_priority_recommendations(df: pd.DataFrame, top_n: int = 3) -> pd.DataFrame:
+def get_yield_priority_recommendations(df: pd.DataFrame, top_n: int = 3, max_p_assign: float = 0.30) -> pd.DataFrame:
     """
     基于收益优先策略获取推荐期权
     筛选条件：
     1. 年化收益率 > 15%
-    2. 被指派概率 < 40% (与强烈推荐页面保持一致)
+    2. 被指派概率 < max_p_assign
     3. 成交量 > 50 (与强烈推荐页面保持一致)
     4. 按年化收益率排序
     """
@@ -501,7 +501,7 @@ def get_yield_priority_recommendations(df: pd.DataFrame, top_n: int = 3) -> pd.D
     # 筛选条件
     filtered = df[
         (df['yield_ann_cash'] > 0.15) &  # 年化收益率 > 15%
-        (df['p_assign'] < 0.30) &        # 被指派概率 < 30%
+        (df['p_assign'] < max_p_assign) &  # 被指派概率 < 阈值
         (df['volume'] > 50)              # 成交量 > 50
     ].copy()
     
@@ -509,7 +509,7 @@ def get_yield_priority_recommendations(df: pd.DataFrame, top_n: int = 3) -> pd.D
         # 如果严格筛选没有结果，放宽条件
         filtered = df[
             (df['yield_ann_cash'] > 0.10) &  # 年化收益率 > 10%
-            (df['p_assign'] < 0.40) &        # 被指派概率 < 40%
+            (df['p_assign'] < min(max_p_assign + 0.10, 0.50)) &  # 被指派概率 < 阈值+10%
             (df['volume'] > 20)              # 成交量 > 20
         ].copy()
     
@@ -663,7 +663,7 @@ def get_nasdaq100_stocks():
     ]
     return nasdaq100_stocks
 
-def _analyze_symbol_recommendation(symbol: str, dte_min: int, dte_max: int) -> Optional[dict]:
+def _analyze_symbol_recommendation(symbol: str, dte_min: int, dte_max: int, max_p_assign: float = 0.30) -> Optional[dict]:
     """并行用：分析单个标的并返回最佳推荐，若无则返回None"""
     try:
         exps = fetch_option_expirations(symbol)
@@ -695,7 +695,7 @@ def _analyze_symbol_recommendation(symbol: str, dte_min: int, dte_max: int) -> O
 
         filtered = df[
             (df['yield_ann_cash'] > 0.25) &
-            (df['p_assign'] < 0.30) &
+            (df['p_assign'] < max_p_assign) &
             (df['volume'] > 50)
         ]
 
@@ -726,7 +726,15 @@ def analyze_nasdaq100_recommendations():
     # 始终提示使用最新数据
     st.success("✅ 使用当前接口获取的最新数据")
     
-    st.markdown("基于纳斯达克100成分股分析，筛选年化收益率>25%且被指派概率<30%的期权")
+    max_p_assign = st.sidebar.selectbox(
+        "被指派概率筛选",
+        options=[0.30, 0.40, 0.50],
+        format_func=lambda x: f"< {int(x*100)}%",
+        index=0,
+        help="筛选被指派概率低于此值的期权"
+    )
+    
+    st.markdown(f"基于纳斯达克100成分股分析，筛选年化收益率>25%且被指派概率<{int(max_p_assign*100)}%的期权")
     
     # 添加筛选参数
     with st.sidebar:
@@ -759,7 +767,7 @@ def analyze_nasdaq100_recommendations():
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_symbol = {
-            executor.submit(_analyze_symbol_recommendation, symbol, dte_min, dte_max): symbol
+            executor.submit(_analyze_symbol_recommendation, symbol, dte_min, dte_max, max_p_assign): symbol
             for symbol in symbols_to_process
         }
 
@@ -784,6 +792,7 @@ def analyze_nasdaq100_recommendations():
         recommendations.sort(key=lambda x: x['yield_ann'], reverse=True)
         
         st.success(f"找到 {len(recommendations)} 个强烈推荐期权！")
+        st.info(f"筛选条件：年化收益率 > 25%，被指派概率 < {int(max_p_assign*100)}%，成交量 > 50")
         
         for i, rec in enumerate(recommendations, 1):  # 显示所有推荐
             with st.container():
@@ -923,18 +932,28 @@ def show_sell_call_page():
     # 筛选推荐期权
     st.subheader("🎯 推荐 Sell Call 期权")
     
-    # 筛选条件：年化收益率 > 15%，被指派概率 < 30%，成交量 > 50
-    strict_filter = (df['yield_ann_cost_basis'] > 0.15) & (df['p_assign'] < 0.30) & (df['volume'] > 50)
-    loose_filter = (df['yield_ann_cost_basis'] > 0.10) & (df['p_assign'] < 0.40) & (df['volume'] > 20)
+    # 获取被指派概率阈值
+    max_p_assign_call = st.sidebar.selectbox(
+        "被指派概率筛选",
+        options=[0.30, 0.40, 0.50],
+        format_func=lambda x: f"< {int(x*100)}%",
+        index=0,
+        help="筛选被指派概率低于此值的看涨期权",
+        key="max_p_assign_call"
+    )
+    
+    # 筛选条件：年化收益率 > 15%，被指派概率 < 阈值，成交量 > 50
+    strict_filter = (df['yield_ann_cost_basis'] > 0.15) & (df['p_assign'] < max_p_assign_call) & (df['volume'] > 50)
+    loose_filter = (df['yield_ann_cost_basis'] > 0.10) & (df['p_assign'] < min(max_p_assign_call + 0.10, 0.50)) & (df['volume'] > 20)
     
     if strict_filter.any():
         recommendations = df[strict_filter].sort_values('yield_ann_cost_basis', ascending=False)
         st.success(f"找到 {len(recommendations)} 个符合严格条件的推荐期权！")
-        st.markdown("**筛选条件**: 年化收益率 > 15%，被指派概率 < 30%，成交量 > 50")
+        st.markdown(f"**筛选条件**: 年化收益率 > 15%，被指派概率 < {int(max_p_assign_call*100)}%，成交量 > 50")
     elif loose_filter.any():
         recommendations = df[loose_filter].sort_values('yield_ann_cost_basis', ascending=False)
         st.warning(f"严格条件下未找到推荐，放宽条件后找到 {len(recommendations)} 个推荐期权")
-        st.markdown("**筛选条件**: 年化收益率 > 10%，被指派概率 < 40%，成交量 > 20")
+        st.markdown(f"**筛选条件**: 年化收益率 > 10%，被指派概率 < {int(min(max_p_assign_call + 0.10, 0.50)*100)}%，成交量 > 20")
     else:
         st.info("当前筛选条件下未找到符合条件的推荐期权，建议调整参数或查看下方完整列表。")
         recommendations = df.head(5)  # 显示前5个作为参考
@@ -1086,6 +1105,16 @@ def main() -> None:
             dte_range = st.slider("到期天数范围（DTE）", min_value=1, max_value=365, value=(1, 45), step=1)
             delta_abs_range = st.slider("目标 |Delta| 范围（卖出看跌）", min_value=0.01, max_value=0.95, value=(0.15, 0.35), step=0.01)
             st.caption("注：Delta 为看跌期权的绝对值筛选区间")
+            
+            max_p_assign_main = st.selectbox(
+                "被指派概率筛选",
+                options=[0.30, 0.40, 0.50],
+                format_func=lambda x: f"< {int(x*100)}%",
+                index=0,
+                help="筛选被指派概率低于此值的期权",
+                key="max_p_assign_main"
+            )
+            
             if st.button("🔄 刷新期权数据", help="清空缓存并重新获取最新期权价格", use_container_width=True, key="refresh_puts"):
                 fetch_put_chain.clear()
                 st.success("已刷新，将重新获取最新数据")
@@ -1185,11 +1214,11 @@ def main() -> None:
 
         # 收益优先策略推荐
         st.subheader("🎯 收益优先策略推荐")
-        recommendations = get_yield_priority_recommendations(df, top_n=3)
+        recommendations = get_yield_priority_recommendations(df, top_n=3, max_p_assign=max_p_assign_main)
         
         if not recommendations.empty:
             st.success(f"基于收益优先策略，为您推荐以下 {len(recommendations)} 个最优期权：")
-            st.markdown("**筛选条件**: 年化收益率 > 15%，被指派概率 < 30%，成交量 > 50")
+            st.markdown(f"**筛选条件**: 年化收益率 > 15%，被指派概率 < {int(max_p_assign_main*100)}%，成交量 > 50")
             
             for idx, (_, rec) in enumerate(recommendations.iterrows(), 1):
                 st.markdown(f"### 推荐 #{idx}")
@@ -1200,8 +1229,15 @@ def main() -> None:
 
         st.markdown("---")
         st.subheader("📊 完整期权列表")
-
-        display = df.copy()
+        
+        # 根据被指派概率过滤
+        df_filtered = df[df['p_assign'] < max_p_assign_main].copy()
+        
+        if df_filtered.empty:
+            st.warning(f"没有找到被指派概率 < {int(max_p_assign_main*100)}% 的期权")
+            df_filtered = df.copy()  # 显示所有
+        
+        display = df_filtered.copy()
         display["yield_ann_cash"] = display["yield_ann_cash"].apply(format_percentage)
         display["yield_ann_breakeven"] = display["yield_ann_breakeven"].apply(format_percentage)
         display["p_assign"] = display["p_assign"].apply(format_percentage)
@@ -1237,7 +1273,7 @@ def main() -> None:
         )
 
         top_n = st.slider("显示前 N 个候选（按年化收益率排序）", 1, 50, 10)
-        st.write("推荐候选：")
+        st.write(f"推荐候选（被指派概率 < {int(max_p_assign_main*100)}%）：")
         st.dataframe(display.head(top_n), use_container_width=True, hide_index=True)
 
         st.caption(
