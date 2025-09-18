@@ -1080,6 +1080,281 @@ def show_sell_call_page():
         - 期权交易具有时间价值衰减风险
         """)
 
+def show_put_management_page():
+    """显示Put管理策略页面"""
+    st.title("🔄 Put 管理策略")
+    st.markdown("当卖出的看跌期权接近到期且可能被行权时，分析不同管理策略的预期收益")
+    
+    with st.sidebar:
+        st.header("当前持仓信息")
+        symbol = st.text_input("股票代码", value="AAPL").upper().strip()
+        current_strike = st.number_input("当前Put执行价 ($)", min_value=0.01, value=150.0, step=0.01, format="%.2f")
+        premium_received = st.number_input("已收权利金 ($)", min_value=0.01, value=2.0, step=0.01, format="%.2f")
+        contracts = st.number_input("合约数量", min_value=1, value=1, step=1)
+        dte_current = st.number_input("当前到期天数", min_value=0, max_value=10, value=3, step=1)
+        days_held = st.number_input("已持有天数", min_value=1, value=30, step=1, help="用于计算已实现年化收益")
+        
+        st.header("分析参数")
+        rf = st.number_input("无风险利率 r（年化）", min_value=0.0, max_value=0.20, value=0.045, step=0.005, format="%.3f")
+        q = st.number_input("股息率 q（年化）", min_value=0.0, max_value=0.10, value=0.0, step=0.005, format="%.3f")
+        
+        max_p_assign_mgmt = st.selectbox(
+            "被指派概率筛选",
+            options=[0.30, 0.40, 0.50],
+            format_func=lambda x: f"< {int(x*100)}%",
+            index=0,
+            help="筛选Roll后被指派概率低于此值的期权",
+            key="max_p_assign_mgmt"
+        )
+    
+    # 获取当前股价
+    try:
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period="1d")
+        if hist.empty:
+            st.error(f"无法获取 {symbol} 的数据")
+            return
+        current_price = estimate_spot_price(symbol, hist)
+        if current_price is None or pd.isna(current_price) or current_price <= 0:
+            st.error(f"获取 {symbol} 股价失败")
+            return
+    except Exception as e:
+        st.error(f"数据获取错误: {str(e)}")
+        return
+    
+    # 显示当前状态
+    st.subheader("📊 当前持仓状态")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("当前股价", f"${current_price:.2f}")
+        moneyness = (current_strike - current_price) / current_price * 100
+        if moneyness > 0:
+            st.caption(f"OTM {moneyness:.1f}%")
+        else:
+            st.caption(f"ITM {abs(moneyness):.1f}%")
+    
+    with col2:
+        st.metric("执行价", f"${current_strike:.2f}")
+        st.caption(f"已收权利金: ${premium_received:.2f}")
+    
+    with col3:
+        # 计算当前被指派概率
+        p_assign_current = 0.5  # 默认值
+        try:
+            iv = calculate_historical_volatility(symbol, 30)
+            t_years = max(0.01, dte_current / 365.0)
+            p_assign_current = put_assignment_probability(current_price, current_strike, t_years, iv, rf, q)
+            st.metric("当前被指派概率", f"{p_assign_current*100:.1f}%")
+        except:
+            st.metric("当前被指派概率", "—")
+    
+    with col4:
+        st.metric("到期天数", f"{dte_current}天")
+        st.caption(f"合约数: {contracts}")
+    
+    # 策略分析
+    st.markdown("---")
+    st.subheader("🎯 管理策略分析")
+    
+    # 策略1: 让期权到期
+    with st.expander("策略1: 持有至到期", expanded=True):
+        st.markdown("### 情景分析")
+        
+        # 情景1: 不被行权
+        profit_expire_otm = premium_received * contracts * 100
+        st.markdown(f"**情景A: 股价高于 ${current_strike:.2f}（不被行权）**")
+        st.success(f"✅ 净利润: ${profit_expire_otm:.2f}")
+        st.caption("保留全部权利金，无需买入股票")
+        
+        # 情景2: 被行权
+        st.markdown(f"**情景B: 股价低于 ${current_strike:.2f}（被行权）**")
+        cost_basis_assigned = current_strike - premium_received
+        st.info(f"📊 买入成本: ${cost_basis_assigned:.2f}/股")
+        st.caption(f"需支付: ${(current_strike * contracts * 100):.2f} 买入 {contracts * 100} 股")
+        
+        # 被行权后的Covered Call分析
+        if current_price < current_strike:
+            st.markdown("**被行权后的 Covered Call 机会：**")
+            
+            # 获取Covered Call期权链
+            exps = fetch_option_expirations(symbol)
+            if exps and len(exps) > 0:
+                # 分析30-45天的Call
+                df_calls = analyze_calls(
+                    symbol=symbol,
+                    spot=current_price,
+                    expirations=exps,
+                    dte_min=30,
+                    dte_max=45,
+                    target_delta_abs_min=0.20,
+                    target_delta_abs_max=0.40,
+                    risk_free_rate=rf,
+                    dividend_yield=q,
+                )
+                
+                if not df_calls.empty:
+                    # 计算基于成本的收益率
+                    df_calls['yield_on_cost'] = (df_calls['mid'] / cost_basis_assigned) * (365 / df_calls['dte'])
+                    
+                    # 筛选推荐的Call
+                    recommended_calls = df_calls[
+                        (df_calls['yield_on_cost'] > 0.10) & 
+                        (df_calls['p_assign'] < 0.50)
+                    ].sort_values('yield_on_cost', ascending=False).head(3)
+                    
+                    if not recommended_calls.empty:
+                        for idx, (_, call) in enumerate(recommended_calls.iterrows(), 1):
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.write(f"**{call['strike']:.0f}C** ({call['dte']}天)")
+                            with col2:
+                                st.write(f"权利金: ${call['mid']:.2f}")
+                            with col3:
+                                st.write(f"年化: {call['yield_on_cost']*100:.1f}%")
+    
+    # 策略2: Roll到远期
+    with st.expander("策略2: Roll 到远期", expanded=True):
+        st.markdown("### Roll 分析")
+        
+        # 获取期权到期日
+        exps = fetch_option_expirations(symbol)
+        if not exps:
+            st.error("无法获取期权到期日数据")
+            return
+        
+        # 计算Roll成本
+        try:
+            # 获取当前Put的买回成本
+            current_chain = yf.Ticker(symbol).option_chain(exps[0])  # 最近的到期日
+            current_puts = current_chain.puts
+            
+            # 找到对应执行价的Put
+            current_put_row = current_puts[current_puts['strike'] == current_strike]
+            if not current_put_row.empty:
+                buy_back_cost = current_put_row.iloc[0]['ask']
+            else:
+                # 估算买回成本
+                if current_price < current_strike:
+                    buy_back_cost = current_strike - current_price + 0.50  # ITM内在价值+时间价值
+                else:
+                    buy_back_cost = 0.20  # OTM估算
+            
+            st.metric("买回成本", f"${buy_back_cost:.2f}/份", help="当前Put的收盘成本")
+            
+        except:
+            buy_back_cost = max(0, current_strike - current_price)
+            st.warning(f"无法获取准确买回价格，估算为: ${buy_back_cost:.2f}")
+        
+        # 分析远期Put
+        st.markdown("### 可Roll到的远期期权")
+        
+        # 获取30-60天的Put期权
+        df_roll = analyze_puts(
+            symbol=symbol,
+            spot=current_price,
+            expirations=exps,
+            dte_min=30,
+            dte_max=60,
+            target_delta_abs_min=0.15,
+            target_delta_abs_max=0.35,
+            risk_free_rate=rf,
+            dividend_yield=q,
+        )
+        
+        if not df_roll.empty:
+            # 筛选符合条件的Roll目标
+            df_roll['net_credit'] = df_roll['mid'] - buy_back_cost
+            df_roll['total_collected'] = premium_received + df_roll['net_credit']
+            df_roll['effective_strike'] = df_roll['strike'] - df_roll['total_collected']
+            
+            # 过滤被指派概率
+            df_roll_filtered = df_roll[df_roll['p_assign'] < max_p_assign_mgmt].copy()
+            
+            if not df_roll_filtered.empty:
+                # 推荐Roll选项
+                st.markdown("**推荐Roll选项：**")
+                
+                for idx, (_, roll) in enumerate(df_roll_filtered.head(3).iterrows(), 1):
+                    with st.container():
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            st.write(f"**{roll['strike']:.0f}P** ({roll['dte']}天)")
+                            if roll['net_credit'] > 0:
+                                st.caption("✅ 净收入")
+                            else:
+                                st.caption("⚠️ 净支出")
+                        
+                        with col2:
+                            st.write(f"净权利金: ${roll['net_credit']:.2f}")
+                            st.caption(f"新权利金: ${roll['mid']:.2f}")
+                        
+                        with col3:
+                            st.write(f"有效成本: ${roll['effective_strike']:.2f}")
+                            st.caption(f"被指派概率: {roll['p_assign']*100:.1f}%")
+                        
+                        with col4:
+                            annual_return = (roll['total_collected'] / roll['strike']) * (365 / (dte_current + roll['dte']))
+                            st.write(f"年化: {annual_return*100:.1f}%")
+                            st.caption(f"总收入: ${roll['total_collected']:.2f}")
+                        
+                        st.markdown("---")
+            else:
+                st.warning(f"没有找到被指派概率 < {int(max_p_assign_mgmt*100)}% 的Roll选项")
+        else:
+            st.error("无法获取远期期权数据")
+    
+    # 策略3: 提前平仓
+    with st.expander("策略3: 提前平仓", expanded=False):
+        st.markdown("### 平仓分析")
+        
+        net_profit_close = (premium_received - buy_back_cost) * contracts * 100
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("平仓净利润", f"${net_profit_close:.2f}")
+            if net_profit_close > 0:
+                st.success("✅ 盈利平仓")
+            else:
+                st.error("❌ 亏损平仓")
+        
+        with col2:
+            if days_held > 0:
+                annualized_return = (net_profit_close / (current_strike * contracts * 100)) * (365 / days_held)
+                st.metric("已实现年化收益", f"{annualized_return*100:.1f}%")
+            else:
+                st.metric("已实现年化收益", "—")
+    
+    # 决策建议
+    st.markdown("---")
+    st.subheader("💡 决策建议")
+    
+    # 基于被指派概率给出建议
+    if p_assign_current > 0.7:
+        st.error("⚠️ 高被指派风险")
+        st.markdown("""
+        **建议考虑：**
+        1. **Roll到远期** - 如果仍然看好该股票长期前景
+        2. **准备接股** - 确保有足够资金，并计划后续Covered Call策略
+        3. **平仓止损** - 如果不想持有该股票
+        """)
+    elif p_assign_current > 0.4:
+        st.warning("⚡ 中等被指派风险")
+        st.markdown("""
+        **建议考虑：**
+        1. **观察等待** - 还有时间，继续观察股价走势
+        2. **准备Roll** - 开始寻找合适的Roll机会
+        3. **资金准备** - 确保有足够资金以防被行权
+        """)
+    else:
+        st.success("✅ 低被指派风险")
+        st.markdown("""
+        **建议考虑：**
+        1. **持有至到期** - 大概率可以保留全部权利金
+        2. **寻找机会** - 如果有更好的机会可以考虑平仓换仓
+        """)
+
 def main() -> None:
     st.set_page_config(page_title="luluwangzi的期权策略", layout="wide")
     
@@ -1095,7 +1370,7 @@ def main() -> None:
         else:
             default_page = "主页"
         
-        page = st.selectbox("选择页面", ["主页", "强烈推荐", "Sell Call", "关于"], index=["主页", "强烈推荐", "Sell Call", "关于"].index(default_page))
+        page = st.selectbox("选择页面", ["主页", "强烈推荐", "Sell Call", "Put 管理", "关于"], index=["主页", "强烈推荐", "Sell Call", "Put 管理", "关于"].index(default_page))
     
     if page == "关于":
         show_about_page()
@@ -1103,6 +1378,8 @@ def main() -> None:
         analyze_nasdaq100_recommendations()
     elif page == "Sell Call":
         show_sell_call_page()
+    elif page == "Put 管理":
+        show_put_management_page()
     else:  # 主页
         st.title("luluwangzi的期权策略")
         
