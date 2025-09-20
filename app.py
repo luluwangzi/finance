@@ -1,3 +1,366 @@
+import random
+import sqlite3
+import time
+from datetime import datetime
+from typing import List, Tuple, Optional
+
+import streamlit as st
+
+
+# -----------------------------
+# Configuration
+# -----------------------------
+GRID_WIDTH = 20
+GRID_HEIGHT = 20
+TICK_MS_DEFAULT = 200
+DATABASE_PATH = "leaderboard.db"
+BGM_URL = (
+    "https://cdn.pixabay.com/download/audio/2022/03/15/audio_5af85b4525.mp3?filename=lofi-study-112191.mp3"
+)
+
+
+# -----------------------------
+# DB utilities
+# -----------------------------
+def initialize_database() -> None:
+    connection = sqlite3.connect(DATABASE_PATH)
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scores (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                score INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def insert_score(name: str, score: int) -> None:
+    connection = sqlite3.connect(DATABASE_PATH)
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            "INSERT INTO scores (name, score, created_at) VALUES (?, ?, ?)",
+            (name.strip()[:50] or "Anonymous", score, datetime.utcnow().isoformat()),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def fetch_top_scores(limit: int = 10) -> List[Tuple[str, int, str]]:
+    connection = sqlite3.connect(DATABASE_PATH)
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            "SELECT name, score, created_at FROM scores ORDER BY score DESC, id ASC LIMIT ?",
+            (limit,),
+        )
+        rows = cursor.fetchall()
+        return [(str(r[0]), int(r[1]), str(r[2])) for r in rows]
+    finally:
+        connection.close()
+
+
+# -----------------------------
+# Game utilities
+# -----------------------------
+Coordinate = Tuple[int, int]
+
+
+def get_initial_snake() -> List[Coordinate]:
+    center_x = GRID_WIDTH // 2
+    center_y = GRID_HEIGHT // 2
+    return [(center_x - 1, center_y), (center_x, center_y), (center_x + 1, center_y)]
+
+
+def random_empty_cell(exclude: List[Coordinate]) -> Coordinate:
+    while True:
+        x = random.randint(0, GRID_WIDTH - 1)
+        y = random.randint(0, GRID_HEIGHT - 1)
+        if (x, y) not in exclude:
+            return (x, y)
+
+
+def move_snake(
+    snake: List[Coordinate], direction: str, grow: bool
+) -> List[Coordinate]:
+    head_x, head_y = snake[-1]
+    if direction == "UP":
+        new_head = (head_x, head_y - 1)
+    elif direction == "DOWN":
+        new_head = (head_x, head_y + 1)
+    elif direction == "LEFT":
+        new_head = (head_x - 1, head_y)
+    else:
+        new_head = (head_x + 1, head_y)
+
+    new_snake = snake.copy()
+    new_snake.append(new_head)
+    if not grow:
+        del new_snake[0]
+    return new_snake
+
+
+def is_collision(snake: List[Coordinate]) -> bool:
+    head_x, head_y = snake[-1]
+    if head_x < 0 or head_x >= GRID_WIDTH or head_y < 0 or head_y >= GRID_HEIGHT:
+        return True
+    body = set(snake[:-1])
+    return (head_x, head_y) in body
+
+
+def render_grid_html(snake: List[Coordinate], food: Coordinate) -> str:
+    snake_set = set(snake)
+    head = snake[-1]
+    cells = []
+    for y in range(GRID_HEIGHT):
+        for x in range(GRID_WIDTH):
+            if (x, y) == head:
+                color = "#2ecc71"  # head
+            elif (x, y) in snake_set:
+                color = "#27ae60"  # body
+            elif (x, y) == food:
+                color = "#e74c3c"  # food
+            else:
+                color = "#1f2937"  # background cell
+            cells.append(f'<div class="cell" style="background:{color}"></div>')
+
+    grid_css = f"""
+    <style>
+      .grid {{
+        display: grid;
+        grid-template-columns: repeat({GRID_WIDTH}, 18px);
+        grid-template-rows: repeat({GRID_HEIGHT}, 18px);
+        gap: 2px;
+        background: #0b1220;
+        padding: 8px;
+        border-radius: 8px;
+        border: 1px solid #374151;
+        width: max-content;
+        margin: 0 auto;
+      }}
+      .cell {{
+        width: 18px;
+        height: 18px;
+        border-radius: 3px;
+      }}
+    </style>
+    """
+    grid_html = f"<div class='grid'>{''.join(cells)}</div>"
+    return grid_css + grid_html
+
+
+def cannot_reverse(current: str, new_dir: str) -> bool:
+    opposites = {"UP": "DOWN", "DOWN": "UP", "LEFT": "RIGHT", "RIGHT": "LEFT"}
+    return opposites[current] == new_dir
+
+
+def ensure_session_state() -> None:
+    if "snake" not in st.session_state:
+        st.session_state.snake = get_initial_snake()
+    if "direction" not in st.session_state:
+        st.session_state.direction = "RIGHT"
+    if "food" not in st.session_state:
+        st.session_state.food = random_empty_cell(st.session_state.snake)
+    if "score" not in st.session_state:
+        st.session_state.score = 0
+    if "game_over" not in st.session_state:
+        st.session_state.game_over = False
+    if "paused" not in st.session_state:
+        st.session_state.paused = False
+    if "last_move_at" not in st.session_state:
+        st.session_state.last_move_at = 0.0
+    if "tick_ms" not in st.session_state:
+        st.session_state.tick_ms = TICK_MS_DEFAULT
+    if "just_ate" not in st.session_state:
+        st.session_state.just_ate = False
+    if "score_submitted" not in st.session_state:
+        st.session_state.score_submitted = False
+
+
+def reset_game() -> None:
+    st.session_state.snake = get_initial_snake()
+    st.session_state.direction = "RIGHT"
+    st.session_state.food = random_empty_cell(st.session_state.snake)
+    st.session_state.score = 0
+    st.session_state.game_over = False
+    st.session_state.paused = False
+    st.session_state.last_move_at = 0.0
+    st.session_state.just_ate = False
+    st.session_state.score_submitted = False
+
+
+def game_tick() -> None:
+    if st.session_state.game_over or st.session_state.paused:
+        return
+
+    now = time.time() * 1000.0
+    if now - st.session_state.last_move_at < st.session_state.tick_ms:
+        return
+
+    st.session_state.last_move_at = now
+
+    snake = st.session_state.snake
+    direction = st.session_state.direction
+    food = st.session_state.food
+
+    new_head_pos = {
+        "UP": (snake[-1][0], snake[-1][1] - 1),
+        "DOWN": (snake[-1][0], snake[-1][1] + 1),
+        "LEFT": (snake[-1][0] - 1, snake[-1][1]),
+        "RIGHT": (snake[-1][0] + 1, snake[-1][1]),
+    }[direction]
+
+    will_grow = new_head_pos == food
+    st.session_state.snake = move_snake(snake, direction, grow=will_grow)
+
+    if is_collision(st.session_state.snake):
+        st.session_state.game_over = True
+        return
+
+    if will_grow:
+        st.session_state.score += 1
+        st.session_state.food = random_empty_cell(st.session_state.snake)
+        st.session_state.just_ate = True
+    else:
+        st.session_state.just_ate = False
+
+    # Trigger a rerun to animate
+    st.experimental_rerun()
+
+
+# -----------------------------
+# UI
+# -----------------------------
+def bgm_player(url: str) -> None:
+    # Use an HTML audio tag to enable loop and attempt autoplay (may require user gesture)
+    audio_html = f"""
+    <audio id="bgm" src="{url}" controls loop autoplay></audio>
+    <script>
+      const audio = document.getElementById('bgm');
+      if (audio) {{
+        audio.volume = 0.4;
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {{
+          playPromise.catch(() => {{ /* Autoplay may be blocked; user can press play */ }});
+        }}
+      }}
+    </script>
+    """
+    st.markdown(audio_html, unsafe_allow_html=True)
+
+
+def controls() -> None:
+    left_col, mid_col, right_col = st.columns(3)
+    with left_col:
+        if st.button("⬅️ 左", use_container_width=True):
+            if not cannot_reverse(st.session_state.direction, "LEFT"):
+                st.session_state.direction = "LEFT"
+    with mid_col:
+        if st.button("⬆️ 上", use_container_width=True):
+            if not cannot_reverse(st.session_state.direction, "UP"):
+                st.session_state.direction = "UP"
+    with right_col:
+        if st.button("➡️ 右", use_container_width=True):
+            if not cannot_reverse(st.session_state.direction, "RIGHT"):
+                st.session_state.direction = "RIGHT"
+
+    bottom_left, bottom_mid, bottom_right = st.columns(3)
+    with bottom_left:
+        st.button("⏸ 暂停" if not st.session_state.paused else "▶️ 继续", key="pause_resume", use_container_width=True, on_click=lambda: setattr(st.session_state, "paused", not st.session_state.paused))
+    with bottom_mid:
+        if st.button("⬇️ 下", use_container_width=True):
+            if not cannot_reverse(st.session_state.direction, "DOWN"):
+                st.session_state.direction = "DOWN"
+    with bottom_right:
+        if st.button("🔄 重开", use_container_width=True):
+            reset_game()
+
+
+def leaderboard_ui() -> None:
+    st.subheader("🏆 成绩排行榜 (Top 10)")
+    scores = fetch_top_scores(10)
+    if not scores:
+        st.caption("暂无成绩，快来创造第一名吧！")
+        return
+
+    for rank, (name, score, created_at) in enumerate(scores, start=1):
+        st.write(f"{rank}. {name} —— {score}")
+
+
+def submit_score_ui() -> None:
+    if st.session_state.score <= 0:
+        st.caption("得分大于 0 才能提交到排行榜哦～")
+        return
+    if st.session_state.score_submitted:
+        st.success("成绩已提交！")
+        return
+    with st.form("submit-score-form"):
+        name = st.text_input("你的名字", value="")
+        submitted = st.form_submit_button("提交成绩")
+        if submitted:
+            safe_name = (name or "Anonymous").strip()[:50]
+            insert_score(safe_name, st.session_state.score)
+            st.session_state.score_submitted = True
+            st.success("提交成功！")
+
+
+def main() -> None:
+    st.set_page_config(page_title="贪吃蛇 Snake | Streamlit", page_icon="🟩", layout="centered")
+    initialize_database()
+    ensure_session_state()
+
+    st.title("🟢 贪吃蛇 | Snake")
+    st.caption("吃到种子时会显示鼓励：\"你太棒了！\"")
+
+    # BGM
+    with st.expander("🎵 BGM 音乐 (如未自动播放，请手动播放)", expanded=True):
+        bgm_player(BGM_URL)
+
+    # Settings
+    with st.sidebar:
+        st.header("设置")
+        speed = st.slider("速度 (毫秒/步)", min_value=80, max_value=500, value=st.session_state.tick_ms, step=20)
+        if speed != st.session_state.tick_ms:
+            st.session_state.tick_ms = int(speed)
+        st.markdown("---")
+        leaderboard_ui()
+
+    # Grid and controls
+    grid_html = render_grid_html(st.session_state.snake, st.session_state.food)
+    st.markdown(grid_html, unsafe_allow_html=True)
+
+    # Feedback when eating
+    if st.session_state.just_ate:
+        st.success("你太棒了！")
+
+    # Status
+    status_cols = st.columns(3)
+    status_cols[0].metric("分数", st.session_state.score)
+    status_cols[1].metric("状态", "结束" if st.session_state.game_over else ("暂停" if st.session_state.paused else "进行中"))
+    status_cols[2].metric("速度(ms)", st.session_state.tick_ms)
+
+    controls()
+
+    # Game over area and score submit
+    if st.session_state.game_over:
+        st.error("游戏结束！")
+        submit_score_ui()
+    else:
+        # Drive game loop
+        game_tick()
+
+
+if __name__ == "__main__":
+    main()
+
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone

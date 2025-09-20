@@ -1,3 +1,34 @@
+# Streamlit Snake Game
+
+A simple Snake game built with Streamlit, featuring looping BGM and a SQLite-backed leaderboard.
+
+## Run locally
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+Open the URL printed by Streamlit (e.g., `http://localhost:8501`). If the background music does not autoplay due to browser policy, click Play in the audio controls at the top.
+
+## How to play
+
+- Use on-screen arrow buttons to change direction
+- Click Pause/Resume to pause or continue
+- Eat red seeds to grow and score points; you'll see “你太棒了！” when you eat one
+- Avoid hitting walls or yourself; the game ends on collision
+
+## Leaderboard
+
+When the game ends and your score is greater than 0, enter your name and submit to add your score to the top-10 leaderboard stored in a local SQLite database (`leaderboard.db`).
+
+## Deploy to Streamlit Community Cloud
+
+1. Push this repo to GitHub
+2. Go to Streamlit Community Cloud and create a new app
+3. Select the repo and set the entrypoint to `app.py`
+4. Deploy. Note that `leaderboard.db` will be ephemeral on most serverless deployments.
+
 ---
 title: MDD & CSP Analyzer
 emoji: 📉
