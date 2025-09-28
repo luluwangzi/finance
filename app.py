@@ -13,6 +13,7 @@ from dateutil import tz
 from scipy.stats import norm
 import pytz
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import json
 
 
 # ---------------------------
@@ -657,6 +658,30 @@ def show_game_page():
     """显示切水果小游戏页面"""
     st.title("🎮 切水果游戏")
     st.caption("提示：按住鼠标或手指滑动进行切割，尽量不要漏掉水果！")
+    difficulty = st.radio("难度", ["易", "难"], index=0, horizontal=True)
+    if difficulty == "易":
+        cfg = {
+            "spawnIntervalMs": 3000,
+            "gravity": 0.18,
+            "vxMin": 1.0,
+            "vxMax": 1.8,
+            "vyMin": 6.5,
+            "vyMax": 9.0,
+            "radiusMin": 24,
+            "radiusMax": 34,
+        }
+    else:
+        cfg = {
+            "spawnIntervalMs": 3000,
+            "gravity": 0.26,
+            "vxMin": 2.0,
+            "vxMax": 3.6,
+            "vyMin": 9.0,
+            "vyMax": 12.0,
+            "radiusMin": 18,
+            "radiusMax": 28,
+        }
+    cfg_script = f"<script id=\"cfg\" type=\"application/json\">{json.dumps(cfg)}</script>"
     game_html = """
     <style>
       .game-container { width: 100%; max-width: 1000px; margin: 0 auto; }
@@ -682,6 +707,7 @@ def show_game_page():
     </div>
     <script>
     (function(){
+      const CONFIG = JSON.parse(document.getElementById('cfg').textContent);
       const canvas = document.getElementById('game');
       const ctx = canvas.getContext('2d');
       const scoreEl = document.getElementById('score');
@@ -699,25 +725,26 @@ def show_game_page():
       bestEl.textContent = best;
       let running = true;
 
-      const gravity = 0.25;
-      const spawnIntervalBaseMs = 900;
+      const gravity = CONFIG.gravity;
+      const spawnIntervalMs = CONFIG.spawnIntervalMs;
       let lastSpawn = 0;
       let fruits = [];
       let particles = [];
       let slicePath = [];
       let lastTime = 0;
+      let goodJobTimer = 0;
 
       const colors = ['#ff5a5f','#ffd166','#06d6a0','#4cc9f0','#f72585','#bde0fe','#f1fa8c'];
 
       function rand(min,max){ return Math.random()*(max-min)+min; }
 
       function spawnFruit(){
-        const radius = rand(18,30);
+        const radius = rand(CONFIG.radiusMin, CONFIG.radiusMax);
         const side = Math.random() < 0.5 ? -1 : 1;
         const x = side < 0 ? rand(60,220) : rand(canvas.width-220, canvas.width-60);
         const y = canvas.height + radius + 4;
-        const vx = side * rand(2.0, 4.0);
-        const vy = -rand(8.0, 12.0);
+        const vx = side * rand(CONFIG.vxMin, CONFIG.vxMax);
+        const vy = -rand(CONFIG.vyMin, CONFIG.vyMax);
         const color = colors[(Math.random()*colors.length)|0];
         fruits.push({x,y,vx,vy,r:radius,color,alive:true,rotation:0,rv:rand(-0.1,0.1)});
       }
@@ -777,9 +804,8 @@ def show_game_page():
 
       function update(dt){
         // spawn
-        if(running && (performance.now()-lastSpawn) > Math.max(300, spawnIntervalBaseMs - score*3)){
+        if(running && (performance.now()-lastSpawn) >= spawnIntervalMs){
           spawnFruit();
-          if(Math.random()<0.4) spawnFruit();
           lastSpawn = performance.now();
         }
 
@@ -811,6 +837,7 @@ def show_game_page():
               score += gain; updateScore();
               combo = Math.min(10, combo+1); comboTimer = 0; updateCombo();
               spawnJuice(f.x,f.y,f.color);
+              goodJobTimer = 800;
             }
           }
         }
@@ -820,6 +847,7 @@ def show_game_page():
 
         // cleanup
         fruits = fruits.filter(f=>f.alive);
+        if(goodJobTimer > 0){ goodJobTimer = Math.max(0, goodJobTimer - dt); }
       }
 
       function draw(){
@@ -850,6 +878,21 @@ def show_game_page():
           ctx.moveTo(slicePath[0].x, slicePath[0].y);
           for(let i=1;i<slicePath.length;i++) ctx.lineTo(slicePath[i].x, slicePath[i].y);
           ctx.stroke();
+        }
+
+        // Good jo'b overlay
+        if(goodJobTimer > 0){
+          const a = Math.min(1, goodJobTimer/800);
+          ctx.save();
+          ctx.globalAlpha = a;
+          ctx.fillStyle = '#f8f9fa';
+          ctx.font = 'bold 48px system-ui,Segoe UI,Roboto,Arial';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.shadowColor = 'rgba(0,0,0,0.6)';
+          ctx.shadowBlur = 10;
+          ctx.fillText('Good jo\'b', canvas.width/2, canvas.height/2);
+          ctx.restore();
         }
 
         if(!running){
@@ -922,7 +965,8 @@ def show_game_page():
     })();
     </script>
     """
-    components.html(game_html, height=640, scrolling=False)
+    # 注入配置脚本后再注入游戏 HTML
+    components.html(cfg_script + game_html, height=640, scrolling=False)
 
 def get_nasdaq100_stocks():
     """获取纳斯达克100指数成分股"""
