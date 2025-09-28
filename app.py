@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 import yfinance as yf
 from dateutil import tz
 from scipy.stats import norm
@@ -650,6 +651,278 @@ def show_about_page():
     - **可视化**：Plotly进行交互式图表展示
     - **部署平台**：Streamlit Cloud
     """)
+
+
+def show_game_page():
+    """显示切水果小游戏页面"""
+    st.title("🎮 切水果游戏")
+    st.caption("提示：按住鼠标或手指滑动进行切割，尽量不要漏掉水果！")
+    game_html = """
+    <style>
+      .game-container { width: 100%; max-width: 1000px; margin: 0 auto; }
+      #hud { display:flex; justify-content:space-between; font-family: system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial; margin: 8px 0; }
+      #hud div { font-weight: 600; }
+      canvas { width: 100%; height: 560px; background: radial-gradient(#0b1d2a, #051018); border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.35); touch-action: none; }
+      .btn-row { margin-top: 8px; display:flex; gap:8px; }
+      button.game-btn { padding:8px 12px; border-radius:8px; border:1px solid #2a3a46; background:#0f2533; color:#dff2ff; cursor:pointer; }
+      button.game-btn:hover { background:#133041; }
+    </style>
+    <div class="game-container">
+      <div id="hud">
+        <div>分数: <span id="score">0</span></div>
+        <div>连击: <span id="combo">x1</span></div>
+        <div>生命: <span id="lives">❤❤❤</span></div>
+        <div>最高分: <span id="best">0</span></div>
+      </div>
+      <canvas id="game" width="960" height="560"></canvas>
+      <div class="btn-row">
+        <button id="restart" class="game-btn">重新开始</button>
+        <button id="pause" class="game-btn">暂停/继续</button>
+      </div>
+    </div>
+    <script>
+    (function(){
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+      const scoreEl = document.getElementById('score');
+      const comboEl = document.getElementById('combo');
+      const livesEl = document.getElementById('lives');
+      const bestEl = document.getElementById('best');
+      const restartBtn = document.getElementById('restart');
+      const pauseBtn = document.getElementById('pause');
+
+      let score = 0;
+      let combo = 1;
+      let comboTimer = 0;
+      let lives = 3;
+      let best = Number(localStorage.getItem('fruit_best')||0);
+      bestEl.textContent = best;
+      let running = true;
+
+      const gravity = 0.25;
+      const spawnIntervalBaseMs = 900;
+      let lastSpawn = 0;
+      let fruits = [];
+      let particles = [];
+      let slicePath = [];
+      let lastTime = 0;
+
+      const colors = ['#ff5a5f','#ffd166','#06d6a0','#4cc9f0','#f72585','#bde0fe','#f1fa8c'];
+
+      function rand(min,max){ return Math.random()*(max-min)+min; }
+
+      function spawnFruit(){
+        const radius = rand(18,30);
+        const side = Math.random() < 0.5 ? -1 : 1;
+        const x = side < 0 ? rand(60,220) : rand(canvas.width-220, canvas.width-60);
+        const y = canvas.height + radius + 4;
+        const vx = side * rand(2.0, 4.0);
+        const vy = -rand(8.0, 12.0);
+        const color = colors[(Math.random()*colors.length)|0];
+        fruits.push({x,y,vx,vy,r:radius,color,alive:true,rotation:0,rv:rand(-0.1,0.1)});
+      }
+
+      function drawFruit(f){
+        ctx.save();
+        ctx.translate(f.x, f.y);
+        ctx.rotate(f.rotation);
+        // body
+        ctx.beginPath();
+        ctx.fillStyle = f.color;
+        ctx.arc(0,0,f.r,0,Math.PI*2);
+        ctx.fill();
+        // glossy highlight
+        ctx.beginPath();
+        ctx.fillStyle = 'rgba(255,255,255,0.15)';
+        ctx.ellipse(-f.r*0.35, -f.r*0.35, f.r*0.45, f.r*0.25, Math.PI/4, 0, Math.PI*2);
+        ctx.fill();
+        // stem
+        ctx.strokeStyle = '#2d6a4f';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(0, -f.r);
+        ctx.lineTo(0, -f.r-10);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      function spawnJuice(x,y,color){
+        for(let i=0;i<10;i++){
+          particles.push({x,y, vx:rand(-2,2), vy:rand(-2,2), life: rand(18,28), color});
+        }
+      }
+
+      function drawParticles(){
+        for(let i=particles.length-1;i>=0;i--){
+          const p = particles[i];
+          p.x += p.vx; p.y += p.vy; p.vy += 0.05; p.life -= 1;
+          ctx.globalAlpha = Math.max(0, p.life/28);
+          ctx.fillStyle = p.color;
+          ctx.beginPath(); ctx.arc(p.x,p.y,3,0,Math.PI*2); ctx.fill();
+          ctx.globalAlpha = 1;
+          if(p.life <= 0) particles.splice(i,1);
+        }
+      }
+
+      function intersectsSegmentCircle(x1,y1,x2,y2,cx,cy,r){
+        const dx = x2-x1, dy=y2-y1;
+        const fx = x1-cx, fy=y1-cy;
+        const a = dx*dx+dy*dy;
+        const b = 2*(fx*dx+fy*dy);
+        const t = Math.max(0, Math.min(1, -b/(2*a||1)));
+        const px = x1 + dx*t, py = y1 + dy*t;
+        const dist2 = (px-cx)*(px-cx)+(py-cy)*(py-cy);
+        return dist2 <= r*r;
+      }
+
+      function update(dt){
+        // spawn
+        if(running && (performance.now()-lastSpawn) > Math.max(300, spawnIntervalBaseMs - score*3)){
+          spawnFruit();
+          if(Math.random()<0.4) spawnFruit();
+          lastSpawn = performance.now();
+        }
+
+        // physics
+        for(let i=fruits.length-1;i>=0;i--){
+          const f = fruits[i];
+          if(!f.alive) continue;
+          f.x += f.vx;
+          f.y += f.vy;
+          f.vy += gravity;
+          f.rotation += f.rv;
+          if(f.y - f.r > canvas.height + 40){
+            // missed
+            f.alive = false;
+            lives -= 1; updateLives(); combo = 1; comboTimer = 0; updateCombo();
+            if(lives <= 0){ running = false; }
+          }
+        }
+
+        // slice check
+        if(slicePath.length >= 2){
+          const a = slicePath[slicePath.length-2];
+          const b = slicePath[slicePath.length-1];
+          for(const f of fruits){
+            if(!f.alive) continue;
+            if(intersectsSegmentCircle(a.x,a.y,b.x,b.y,f.x,f.y,f.r)){
+              f.alive = false;
+              const gain = 1 * combo;
+              score += gain; updateScore();
+              combo = Math.min(10, combo+1); comboTimer = 0; updateCombo();
+              spawnJuice(f.x,f.y,f.color);
+            }
+          }
+        }
+
+        comboTimer += dt;
+        if(comboTimer > 1200){ combo = 1; updateCombo(); }
+
+        // cleanup
+        fruits = fruits.filter(f=>f.alive);
+      }
+
+      function draw(){
+        // background grid fade
+        const grd = ctx.createLinearGradient(0,0,0,canvas.height);
+        grd.addColorStop(0,'#0b1d2a');
+        grd.addColorStop(1,'#0a1a25');
+        ctx.fillStyle = grd;
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+
+        // subtle grid
+        ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+        ctx.lineWidth = 1;
+        for(let x=0;x<canvas.width;x+=40){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke(); }
+        for(let y=0;y<canvas.height;y+=40){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke(); }
+
+        // fruits
+        for(const f of fruits){ drawFruit(f); }
+
+        // particles
+        drawParticles();
+
+        // slice trail
+        if(slicePath.length>1){
+          ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(slicePath[0].x, slicePath[0].y);
+          for(let i=1;i<slicePath.length;i++) ctx.lineTo(slicePath[i].x, slicePath[i].y);
+          ctx.stroke();
+        }
+
+        if(!running){
+          ctx.fillStyle = 'rgba(0,0,0,0.5)';
+          ctx.fillRect(0,0,canvas.width,canvas.height);
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 42px system-ui,Segoe UI,Roboto,Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText('游戏结束', canvas.width/2, canvas.height/2 - 10);
+          ctx.font = '24px system-ui,Segoe UI,Roboto,Arial';
+          ctx.fillText('点击 重新开始 按钮再来一次', canvas.width/2, canvas.height/2 + 26);
+        }
+      }
+
+      function updateScore(){ scoreEl.textContent = score; if(score>best){ best=score; localStorage.setItem('fruit_best', best); bestEl.textContent = best; } }
+      function updateCombo(){ comboEl.textContent = 'x'+combo; }
+      function updateLives(){ livesEl.textContent = '❤'.repeat(Math.max(0,lives)); }
+
+      function reset(){
+        score = 0; combo = 1; comboTimer = 0; lives = 3; running = true;
+        fruits = []; particles = []; slicePath = [];
+        updateScore(); updateCombo(); updateLives();
+        lastSpawn = performance.now();
+      }
+
+      let slicing = false;
+      function addSlicePoint(x,y){
+        slicePath.push({x,y, t: performance.now()});
+        // keep last N points
+        if(slicePath.length>30) slicePath.shift();
+      }
+
+      function pruneSlice(){
+        const now = performance.now();
+        slicePath = slicePath.filter(p => now - p.t < 250);
+      }
+
+      function getPos(e){
+        const rect = canvas.getBoundingClientRect();
+        if(e.touches && e.touches[0]){
+          return { x: (e.touches[0].clientX - rect.left) * (canvas.width/rect.width), y: (e.touches[0].clientY - rect.top) * (canvas.height/rect.height) };
+        }
+        return { x: (e.clientX - rect.left) * (canvas.width/rect.width), y: (e.clientY - rect.top) * (canvas.height/rect.height) };
+      }
+
+      canvas.addEventListener('pointerdown', (e)=>{ slicing = true; addSlicePoint(...Object.values(getPos(e))); });
+      canvas.addEventListener('pointermove', (e)=>{ if(slicing){ const p = getPos(e); addSlicePoint(p.x,p.y);} });
+      window.addEventListener('pointerup', ()=>{ slicing=false; });
+
+      // Touch events fallback
+      canvas.addEventListener('touchstart', (e)=>{ slicing = true; const p=getPos(e); addSlicePoint(p.x,p.y); e.preventDefault(); }, {passive:false});
+      canvas.addEventListener('touchmove', (e)=>{ if(slicing){ const p=getPos(e); addSlicePoint(p.x,p.y);} e.preventDefault(); }, {passive:false});
+      canvas.addEventListener('touchend', ()=>{ slicing=false; });
+
+      restartBtn.addEventListener('click', reset);
+      pauseBtn.addEventListener('click', ()=>{ running = !running; });
+
+      function loop(ts){
+        const dt = ts - lastTime; lastTime = ts;
+        if(running){ update(dt); }
+        pruneSlice();
+        draw();
+        requestAnimationFrame(loop);
+      }
+
+      reset();
+      requestAnimationFrame(loop);
+      // handle visibility
+      document.addEventListener('visibilitychange', ()=>{ if(document.hidden) running=false; });
+    })();
+    </script>
+    """
+    components.html(game_html, height=640, scrolling=False)
 
 def get_nasdaq100_stocks():
     """获取纳斯达克100指数成分股"""
@@ -1358,221 +1631,228 @@ def show_put_management_page():
 def main() -> None:
     st.set_page_config(page_title="luluwangzi的期权策略", layout="wide")
     
-    # 添加侧边栏导航
-    with st.sidebar:
-        st.title("🧭 导航")
-        
-        # 检查是否有跳转到主页的请求
-        if 'switch_to_home' in st.session_state and st.session_state['switch_to_home']:
-            default_page = "主页"
-            # 清除跳转标志
-            del st.session_state['switch_to_home']
-        else:
-            default_page = "主页"
-        
-        page = st.selectbox("选择页面", ["主页", "强烈推荐", "Sell Call", "Put 管理", "关于"], index=["主页", "强烈推荐", "Sell Call", "Put 管理", "关于"].index(default_page))
+    # 顶部标签：应用 / 游戏
+    app_tab, game_tab = st.tabs(["应用", "游戏"])
     
-    if page == "关于":
-        show_about_page()
-    elif page == "强烈推荐":
-        analyze_nasdaq100_recommendations()
-    elif page == "Sell Call":
-        show_sell_call_page()
-    elif page == "Put 管理":
-        show_put_management_page()
-    else:  # 主页
-        st.title("luluwangzi的期权策略")
-        
+    with game_tab:
+        show_game_page()
+    
+    with app_tab:
+        # 添加侧边栏导航
         with st.sidebar:
-            st.header("参数")
-            # 检查是否有从强烈推荐页面传递的股票代码
-            default_symbol = "AAPL"
-            if 'selected_symbol' in st.session_state:
-                default_symbol = st.session_state['selected_symbol']
-                # 清除session state，避免重复使用
-                del st.session_state['selected_symbol']
+            st.title("🧭 导航")
             
-            symbol = st.text_input("股票代码（如 AAPL, MSFT, SPY）", value=default_symbol).upper().strip()
-            years = st.slider("历史回看年数", min_value=3, max_value=25, value=10, step=1)
-            rf = st.number_input("无风险利率 r（年化）", min_value=0.0, max_value=0.20, value=0.045, step=0.005, format="%.3f")
-            q = st.number_input("股息率 q（年化，近似）", min_value=0.0, max_value=0.10, value=0.0, step=0.005, format="%.3f")
-            dte_range = st.slider("到期天数范围（DTE）", min_value=1, max_value=365, value=(1, 45), step=1)
-            delta_abs_range = st.slider("目标 |Delta| 范围（卖出看跌）", min_value=0.01, max_value=0.95, value=(0.15, 0.35), step=0.01)
-            st.caption("注：Delta 为看跌期权的绝对值筛选区间")
-            
-            max_p_assign_main = st.selectbox(
-                "被指派概率筛选",
-                options=[0.30, 0.40, 0.50],
-                format_func=lambda x: f"< {int(x*100)}%",
-                index=0,
-                help="筛选被指派概率低于此值的期权",
-                key="max_p_assign_main"
-            )
-            
-            if st.button("🔄 刷新期权数据", help="清空缓存并重新获取最新期权价格", use_container_width=True, key="refresh_puts"):
-                fetch_put_chain.clear()
-                st.success("已刷新，将重新获取最新数据")
-                st.rerun()
-
-        # Price history and MDD
-        hist = fetch_price_history(symbol, years)
-        if hist.empty:
-            st.error("未能获取历史数据，请检查股票代码或稍后重试。")
-            return
-
-        mdd = compute_max_drawdown(hist["Close"]) 
-        spot = estimate_spot_price(symbol, hist)
-
-        # 计算历史最高价信息
-        hist_high_price = hist["Close"].max()
-        hist_high_date = hist["Close"].idxmax()
-        hist_high_days_ago = (datetime.now(timezone.utc) - hist_high_date).days
-        
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("现价", format_currency(spot) if spot is not None else "—")
-        with col2:
-            st.metric("最大回撤", format_percentage(mdd.max_drawdown_pct))
-        with col3:
-            # 历史最高价显示
-            if hist_high_days_ago <= 730:  # 24个月内
-                time_str = f"{hist_high_days_ago}天前"
+            # 检查是否有跳转到主页的请求
+            if 'switch_to_home' in st.session_state and st.session_state['switch_to_home']:
+                default_page = "主页"
+                # 清除跳转标志
+                del st.session_state['switch_to_home']
             else:
-                time_str = f"{hist_high_days_ago//365}年前"
-            st.metric("历史最高价", f"${hist_high_price:.2f}", delta=time_str, help=f"历史最高价: ${hist_high_price:.2f} ({hist_high_date.strftime('%Y-%m-%d')})")
-        with col4:
-            # 最大回撤低点显示
-            if mdd.trough_date and mdd.peak_date:
-                trough_days_ago = (datetime.now(timezone.utc) - mdd.trough_date).days
-                if trough_days_ago <= 730:  # 24个月内
-                    time_str = f"{trough_days_ago}天前"
-                else:
-                    time_str = f"{trough_days_ago//365}年前"
+                default_page = "主页"
+            
+            page = st.selectbox("选择页面", ["主页", "强烈推荐", "Sell Call", "Put 管理", "关于"], index=["主页", "强烈推荐", "Sell Call", "Put 管理", "关于"].index(default_page))
+        
+        if page == "关于":
+            show_about_page()
+        elif page == "强烈推荐":
+            analyze_nasdaq100_recommendations()
+        elif page == "Sell Call":
+            show_sell_call_page()
+        elif page == "Put 管理":
+            show_put_management_page()
+        else:  # 主页
+            st.title("luluwangzi的期权策略")
+            
+            with st.sidebar:
+                st.header("参数")
+                # 检查是否有从强烈推荐页面传递的股票代码
+                default_symbol = "AAPL"
+                if 'selected_symbol' in st.session_state:
+                    default_symbol = st.session_state['selected_symbol']
+                    # 清除session state，避免重复使用
+                    del st.session_state['selected_symbol']
                 
-                peak_price = hist.loc[mdd.peak_date, 'Close']
-                trough_price = hist.loc[mdd.trough_date, 'Close']
-                st.metric("最大回撤低点", f"${trough_price:.2f}", delta=time_str, help=f"从${peak_price:.2f}回撤到${trough_price:.2f} ({mdd.trough_date.strftime('%Y-%m-%d')})")
+                symbol = st.text_input("股票代码（如 AAPL, MSFT, SPY）", value=default_symbol).upper().strip()
+                years = st.slider("历史回看年数", min_value=3, max_value=25, value=10, step=1)
+                rf = st.number_input("无风险利率 r（年化）", min_value=0.0, max_value=0.20, value=0.045, step=0.005, format="%.3f")
+                q = st.number_input("股息率 q（年化，近似）", min_value=0.0, max_value=0.10, value=0.0, step=0.005, format="%.3f")
+                dte_range = st.slider("到期天数范围（DTE）", min_value=1, max_value=365, value=(1, 45), step=1)
+                delta_abs_range = st.slider("目标 |Delta| 范围（卖出看跌）", min_value=0.01, max_value=0.95, value=(0.15, 0.35), step=0.01)
+                st.caption("注：Delta 为看跌期权的绝对值筛选区间")
+                
+                max_p_assign_main = st.selectbox(
+                    "被指派概率筛选",
+                    options=[0.30, 0.40, 0.50],
+                    format_func=lambda x: f"< {int(x*100)}%",
+                    index=0,
+                    help="筛选被指派概率低于此值的期权",
+                    key="max_p_assign_main"
+                )
+                
+                if st.button("🔄 刷新期权数据", help="清空缓存并重新获取最新期权价格", use_container_width=True, key="refresh_puts"):
+                    fetch_put_chain.clear()
+                    st.success("已刷新，将重新获取最新数据")
+                    st.rerun()
+
+            # Price history and MDD
+            hist = fetch_price_history(symbol, years)
+            if hist.empty:
+                st.error("未能获取历史数据，请检查股票代码或稍后重试。")
+                return
+
+            mdd = compute_max_drawdown(hist["Close"]) 
+            spot = estimate_spot_price(symbol, hist)
+
+            # 计算历史最高价信息
+            hist_high_price = hist["Close"].max()
+            hist_high_date = hist["Close"].idxmax()
+            hist_high_days_ago = (datetime.now(timezone.utc) - hist_high_date).days
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("现价", format_currency(spot) if spot is not None else "—")
+            with col2:
+                st.metric("最大回撤", format_percentage(mdd.max_drawdown_pct))
+            with col3:
+                # 历史最高价显示
+                if hist_high_days_ago <= 730:  # 24个月内
+                    time_str = f"{hist_high_days_ago}天前"
+                else:
+                    time_str = f"{hist_high_days_ago//365}年前"
+                st.metric("历史最高价", f"${hist_high_price:.2f}", delta=time_str, help=f"历史最高价: ${hist_high_price:.2f} ({hist_high_date.strftime('%Y-%m-%d')})")
+            with col4:
+                # 最大回撤低点显示
+                if mdd.trough_date and mdd.peak_date:
+                    trough_days_ago = (datetime.now(timezone.utc) - mdd.trough_date).days
+                    if trough_days_ago <= 730:  # 24个月内
+                        time_str = f"{trough_days_ago}天前"
+                    else:
+                        time_str = f"{trough_days_ago//365}年前"
+                    
+                    peak_price = hist.loc[mdd.peak_date, 'Close']
+                    trough_price = hist.loc[mdd.trough_date, 'Close']
+                    st.metric("最大回撤低点", f"${trough_price:.2f}", delta=time_str, help=f"从${peak_price:.2f}回撤到${trough_price:.2f} ({mdd.trough_date.strftime('%Y-%m-%d')})")
+                else:
+                    st.metric("最大回撤低点", "—")
+
+            st.plotly_chart(plot_price_and_drawdown(hist, mdd.series), use_container_width=True)
+            
+            # 添加说明
+            with st.expander("📊 指标说明", expanded=False):
+                st.markdown("""
+                **历史数据指标说明：**
+                - **现价**: 当前股票市场价格
+                - **最大回撤**: 历史上从某个峰值到谷值的最大跌幅百分比
+                - **历史最高价**: 显示价格和时间，整个历史期间的最高价格
+                - **最大回撤低点**: 显示价格和时间，以及从哪个峰值回撤而来
+                
+                **显示格式说明：**
+                - 主值显示价格（如 $183.15）
+                - Delta显示相对时间（如 "30天前"）
+                - 悬停提示显示完整信息（价格、具体日期、回撤详情）
+                
+                **重要区别：**
+                - **历史最高价** ≠ **最大回撤的峰值**
+                - 历史最高价是绝对的最高价格
+                - 最大回撤的峰值是导致最大回撤的那个峰值（可能不是历史最高价）
+                
+                **回撤分析意义：**
+                - 回撤越小，说明股票价格相对稳定
+                - 回撤越大，说明股价波动较大，卖出看跌期权风险相对较高
+                - 建议结合历史回撤情况选择合适的期权策略
+                """)
+
+            # Options analysis
+            st.subheader("卖出看跌期权（CSP）收益与风险估算")
+            exps = fetch_option_expirations(symbol)
+            if not exps:
+                st.warning("该标的暂无可用期权到期日或数据获取失败。")
+                return
+            
+            dte_min, dte_max = dte_range
+            df = analyze_puts(
+                symbol=symbol,
+                spot=spot if spot is not None else float(hist["Close"].iloc[-1]),
+                expirations=exps,
+                dte_min=int(dte_min),
+                dte_max=int(dte_max),
+                target_delta_abs_min=float(delta_abs_range[0]),
+                target_delta_abs_max=float(delta_abs_range[1]),
+                risk_free_rate=float(rf),
+                dividend_yield=float(q),
+            )
+
+            if df.empty:
+                st.info("按当前筛选条件未找到合适的期权合约，可调整 DTE 或 |Delta| 范围。")
+                return
+
+            # 收益优先策略推荐
+            st.subheader("🎯 收益优先策略推荐")
+            recommendations = get_yield_priority_recommendations(df, top_n=3, max_p_assign=max_p_assign_main)
+            
+            if not recommendations.empty:
+                st.success(f"基于收益优先策略，为您推荐以下 {len(recommendations)} 个最优期权：")
+                st.markdown(f"**筛选条件**: 年化收益率 > 15%，被指派概率 < {int(max_p_assign_main*100)}%，成交量 > 50")
+                
+                for idx, (_, rec) in enumerate(recommendations.iterrows(), 1):
+                    st.markdown(f"### 推荐 #{idx}")
+                    display_recommendation_card(rec, symbol)
             else:
-                st.metric("最大回撤低点", "—")
+                st.warning("当前筛选条件下未找到符合收益优先策略的期权，建议调整参数或查看下方完整列表。")
+                st.markdown("**建议**: 可以适当放宽 DTE 范围或 Delta 范围来获得更多选择。")
 
-        st.plotly_chart(plot_price_and_drawdown(hist, mdd.series), use_container_width=True)
-        
-        # 添加说明
-        with st.expander("📊 指标说明", expanded=False):
-            st.markdown("""
-            **历史数据指标说明：**
-            - **现价**: 当前股票市场价格
-            - **最大回撤**: 历史上从某个峰值到谷值的最大跌幅百分比
-            - **历史最高价**: 显示价格和时间，整个历史期间的最高价格
-            - **最大回撤低点**: 显示价格和时间，以及从哪个峰值回撤而来
+            st.markdown("---")
+            st.subheader("📊 完整期权列表")
             
-            **显示格式说明：**
-            - 主值显示价格（如 $183.15）
-            - Delta显示相对时间（如 "30天前"）
-            - 悬停提示显示完整信息（价格、具体日期、回撤详情）
+            # 根据被指派概率过滤
+            df_filtered = df[df['p_assign'] < max_p_assign_main].copy()
             
-            **重要区别：**
-            - **历史最高价** ≠ **最大回撤的峰值**
-            - 历史最高价是绝对的最高价格
-            - 最大回撤的峰值是导致最大回撤的那个峰值（可能不是历史最高价）
+            if df_filtered.empty:
+                st.warning(f"没有找到被指派概率 < {int(max_p_assign_main*100)}% 的期权")
+                df_filtered = df.copy()  # 显示所有
             
-            **回撤分析意义：**
-            - 回撤越小，说明股票价格相对稳定
-            - 回撤越大，说明股价波动较大，卖出看跌期权风险相对较高
-            - 建议结合历史回撤情况选择合适的期权策略
-            """)
+            display = df_filtered.copy()
+            display["yield_ann_cash"] = display["yield_ann_cash"].apply(format_percentage)
+            display["yield_ann_breakeven"] = display["yield_ann_breakeven"].apply(format_percentage)
+            display["p_assign"] = display["p_assign"].apply(format_percentage)
+            display["p_touch"] = display["p_touch"].apply(format_percentage)
+            display["mid"] = display["mid"].apply(format_currency)
+            display["premium_contract"] = display["premium_contract"].apply(format_currency)
+            display["breakeven"] = display["breakeven"].apply(format_currency)
+            display["iv"] = display["iv"].apply(lambda v: f"{v*100:.2f}%" if np.isfinite(v) else "—")
+            display["delta_put"] = display["delta_put"].apply(lambda v: f"{v:.3f}" if np.isfinite(v) else "—")
 
-        # Options analysis
-        st.subheader("卖出看跌期权（CSP）收益与风险估算")
-        exps = fetch_option_expirations(symbol)
-        if not exps:
-            st.warning("该标的暂无可用期权到期日或数据获取失败。")
-            return
+            st.dataframe(
+                display[
+                    [
+                        "expiration",
+                        "dte",
+                        "strike",
+                        "mid",
+                        "premium_contract",
+                        "iv",
+                        "delta_put",
+                        "breakeven",
+                        "yield_ann_cash",
+                        "yield_ann_breakeven",
+                        "p_assign",
+                        "p_touch",
+                        "volume",
+                        "openInterest",
+                        "contractSymbol",
+                    ]
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
 
-        dte_min, dte_max = dte_range
-        df = analyze_puts(
-            symbol=symbol,
-            spot=spot if spot is not None else float(hist["Close"].iloc[-1]),
-            expirations=exps,
-            dte_min=int(dte_min),
-            dte_max=int(dte_max),
-            target_delta_abs_min=float(delta_abs_range[0]),
-            target_delta_abs_max=float(delta_abs_range[1]),
-            risk_free_rate=float(rf),
-            dividend_yield=float(q),
-        )
+            top_n = st.slider("显示前 N 个候选（按年化收益率排序）", 1, 50, 10)
+            st.write(f"推荐候选（被指派概率 < {int(max_p_assign_main*100)}%）：")
+            st.dataframe(display.head(top_n), use_container_width=True, hide_index=True)
 
-        if df.empty:
-            st.info("按当前筛选条件未找到合适的期权合约，可调整 DTE 或 |Delta| 范围。")
-            return
-
-        # 收益优先策略推荐
-        st.subheader("🎯 收益优先策略推荐")
-        recommendations = get_yield_priority_recommendations(df, top_n=3, max_p_assign=max_p_assign_main)
-        
-        if not recommendations.empty:
-            st.success(f"基于收益优先策略，为您推荐以下 {len(recommendations)} 个最优期权：")
-            st.markdown(f"**筛选条件**: 年化收益率 > 15%，被指派概率 < {int(max_p_assign_main*100)}%，成交量 > 50")
-            
-            for idx, (_, rec) in enumerate(recommendations.iterrows(), 1):
-                st.markdown(f"### 推荐 #{idx}")
-                display_recommendation_card(rec, symbol)
-        else:
-            st.warning("当前筛选条件下未找到符合收益优先策略的期权，建议调整参数或查看下方完整列表。")
-            st.markdown("**建议**: 可以适当放宽 DTE 范围或 Delta 范围来获得更多选择。")
-
-        st.markdown("---")
-        st.subheader("📊 完整期权列表")
-        
-        # 根据被指派概率过滤
-        df_filtered = df[df['p_assign'] < max_p_assign_main].copy()
-        
-        if df_filtered.empty:
-            st.warning(f"没有找到被指派概率 < {int(max_p_assign_main*100)}% 的期权")
-            df_filtered = df.copy()  # 显示所有
-        
-        display = df_filtered.copy()
-        display["yield_ann_cash"] = display["yield_ann_cash"].apply(format_percentage)
-        display["yield_ann_breakeven"] = display["yield_ann_breakeven"].apply(format_percentage)
-        display["p_assign"] = display["p_assign"].apply(format_percentage)
-        display["p_touch"] = display["p_touch"].apply(format_percentage)
-        display["mid"] = display["mid"].apply(format_currency)
-        display["premium_contract"] = display["premium_contract"].apply(format_currency)
-        display["breakeven"] = display["breakeven"].apply(format_currency)
-        display["iv"] = display["iv"].apply(lambda v: f"{v*100:.2f}%" if np.isfinite(v) else "—")
-        display["delta_put"] = display["delta_put"].apply(lambda v: f"{v:.3f}" if np.isfinite(v) else "—")
-
-        st.dataframe(
-            display[
-                [
-                    "expiration",
-                    "dte",
-                    "strike",
-                    "mid",
-                    "premium_contract",
-                    "iv",
-                    "delta_put",
-                    "breakeven",
-                    "yield_ann_cash",
-                    "yield_ann_breakeven",
-                    "p_assign",
-                    "p_touch",
-                    "volume",
-                    "openInterest",
-                    "contractSymbol",
-                ]
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        top_n = st.slider("显示前 N 个候选（按年化收益率排序）", 1, 50, 10)
-        st.write(f"推荐候选（被指派概率 < {int(max_p_assign_main*100)}%）：")
-        st.dataframe(display.head(top_n), use_container_width=True, hide_index=True)
-
-        st.caption(
-            "风险提示：本工具基于历史数据与简化模型进行估计，不构成任何投资建议。期权具有高风险，请谨慎评估。"
-        )
+            st.caption(
+                "风险提示：本工具基于历史数据与简化模型进行估计，不构成任何投资建议。期权具有高风险，请谨慎评估。"
+            )
 
 
 if __name__ == "__main__":
