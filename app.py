@@ -707,7 +707,9 @@ def show_game_page():
     </div>
     <script>
     (function(){
-      const CONFIG = JSON.parse(document.getElementById('cfg').textContent);
+      const cfgEl = document.getElementById('cfg');
+      let CONFIG = { spawnIntervalMs: 3000, gravity: 0.22, vxMin: 1.2, vxMax: 2.2, vyMin: 7.5, vyMax: 10.5, radiusMin: 22, radiusMax: 32 };
+      try { if (cfgEl && cfgEl.textContent) { CONFIG = Object.assign(CONFIG, JSON.parse(cfgEl.textContent)); } } catch(e) { /* fallback defaults already set */ }
       const canvas = document.getElementById('game');
       const ctx = canvas.getContext('2d');
       const scoreEl = document.getElementById('score');
@@ -915,7 +917,8 @@ def show_game_page():
         score = 0; combo = 1; comboTimer = 0; lives = 3; running = true;
         fruits = []; particles = []; slicePath = [];
         updateScore(); updateCombo(); updateLives();
-        lastSpawn = performance.now();
+        // Force first spawn to happen immediately on start
+        lastSpawn = performance.now() - spawnIntervalMs;
       }
 
       let slicing = false;
