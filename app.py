@@ -1860,124 +1860,124 @@ def main() -> None:
                 else:
                     st.metric("最大回撤低点", "—")
 
-        st.plotly_chart(plot_price_and_drawdown(hist, mdd.series), use_container_width=True)
-        
-        # 添加说明
-        with st.expander("📊 指标说明", expanded=False):
-            st.markdown("""
-            **历史数据指标说明：**
-            - **现价**: 当前股票市场价格
-            - **最大回撤**: 历史上从某个峰值到谷值的最大跌幅百分比
-            - **历史最高价**: 显示价格和时间，整个历史期间的最高价格
-            - **最大回撤低点**: 显示价格和时间，以及从哪个峰值回撤而来
+            st.plotly_chart(plot_price_and_drawdown(hist, mdd.series), use_container_width=True)
             
-            **显示格式说明：**
-            - 主值显示价格（如 $183.15）
-            - Delta显示相对时间（如 "30天前"）
-            - 悬停提示显示完整信息（价格、具体日期、回撤详情）
+            # 添加说明
+            with st.expander("📊 指标说明", expanded=False):
+                st.markdown("""
+                **历史数据指标说明：**
+                - **现价**: 当前股票市场价格
+                - **最大回撤**: 历史上从某个峰值到谷值的最大跌幅百分比
+                - **历史最高价**: 显示价格和时间，整个历史期间的最高价格
+                - **最大回撤低点**: 显示价格和时间，以及从哪个峰值回撤而来
+                
+                **显示格式说明：**
+                - 主值显示价格（如 $183.15）
+                - Delta显示相对时间（如 "30天前"）
+                - 悬停提示显示完整信息（价格、具体日期、回撤详情）
+                
+                **重要区别：**
+                - **历史最高价** ≠ **最大回撤的峰值**
+                - 历史最高价是绝对的最高价格
+                - 最大回撤的峰值是导致最大回撤的那个峰值（可能不是历史最高价）
+                
+                **回撤分析意义：**
+                - 回撤越小，说明股票价格相对稳定
+                - 回撤越大，说明股价波动较大，卖出看跌期权风险相对较高
+                - 建议结合历史回撤情况选择合适的期权策略
+                """)
+
+            # Options analysis
+            st.subheader("卖出看跌期权（CSP）收益与风险估算")
+            exps = fetch_option_expirations(symbol)
+            if not exps:
+                st.warning("该标的暂无可用期权到期日或数据获取失败。")
+                return
             
-            **重要区别：**
-            - **历史最高价** ≠ **最大回撤的峰值**
-            - 历史最高价是绝对的最高价格
-            - 最大回撤的峰值是导致最大回撤的那个峰值（可能不是历史最高价）
+            dte_min, dte_max = dte_range
+            df = analyze_puts(
+                symbol=symbol,
+                spot=spot if spot is not None else float(hist["Close"].iloc[-1]),
+                expirations=exps,
+                dte_min=int(dte_min),
+                dte_max=int(dte_max),
+                target_delta_abs_min=float(delta_abs_range[0]),
+                target_delta_abs_max=float(delta_abs_range[1]),
+                risk_free_rate=float(rf),
+                dividend_yield=float(q),
+            )
+
+            if df.empty:
+                st.info("按当前筛选条件未找到合适的期权合约，可调整 DTE 或 |Delta| 范围。")
+                return
+
+            # 收益优先策略推荐
+            st.subheader("🎯 收益优先策略推荐")
+            recommendations = get_yield_priority_recommendations(df, top_n=3, max_p_assign=max_p_assign_main)
             
-            **回撤分析意义：**
-            - 回撤越小，说明股票价格相对稳定
-            - 回撤越大，说明股价波动较大，卖出看跌期权风险相对较高
-            - 建议结合历史回撤情况选择合适的期权策略
-            """)
+            if not recommendations.empty:
+                st.success(f"基于收益优先策略，为您推荐以下 {len(recommendations)} 个最优期权：")
+                st.markdown(f"**筛选条件**: 年化收益率 > 15%，被指派概率 < {int(max_p_assign_main*100)}%，成交量 > 50")
+                
+                for idx, (_, rec) in enumerate(recommendations.iterrows(), 1):
+                    st.markdown(f"### 推荐 #{idx}")
+                    display_recommendation_card(rec, symbol)
+            else:
+                st.warning("当前筛选条件下未找到符合收益优先策略的期权，建议调整参数或查看下方完整列表。")
+                st.markdown("**建议**: 可以适当放宽 DTE 范围或 Delta 范围来获得更多选择。")
 
-        # Options analysis
-        st.subheader("卖出看跌期权（CSP）收益与风险估算")
-        exps = fetch_option_expirations(symbol)
-        if not exps:
-            st.warning("该标的暂无可用期权到期日或数据获取失败。")
-            return
-        
-        dte_min, dte_max = dte_range
-        df = analyze_puts(
-            symbol=symbol,
-            spot=spot if spot is not None else float(hist["Close"].iloc[-1]),
-            expirations=exps,
-            dte_min=int(dte_min),
-            dte_max=int(dte_max),
-            target_delta_abs_min=float(delta_abs_range[0]),
-            target_delta_abs_max=float(delta_abs_range[1]),
-            risk_free_rate=float(rf),
-            dividend_yield=float(q),
-        )
-
-        if df.empty:
-            st.info("按当前筛选条件未找到合适的期权合约，可调整 DTE 或 |Delta| 范围。")
-            return
-
-        # 收益优先策略推荐
-        st.subheader("🎯 收益优先策略推荐")
-        recommendations = get_yield_priority_recommendations(df, top_n=3, max_p_assign=max_p_assign_main)
-        
-        if not recommendations.empty:
-            st.success(f"基于收益优先策略，为您推荐以下 {len(recommendations)} 个最优期权：")
-            st.markdown(f"**筛选条件**: 年化收益率 > 15%，被指派概率 < {int(max_p_assign_main*100)}%，成交量 > 50")
+            st.markdown("---")
+            st.subheader("📊 完整期权列表")
             
-            for idx, (_, rec) in enumerate(recommendations.iterrows(), 1):
-                st.markdown(f"### 推荐 #{idx}")
-                display_recommendation_card(rec, symbol)
-        else:
-            st.warning("当前筛选条件下未找到符合收益优先策略的期权，建议调整参数或查看下方完整列表。")
-            st.markdown("**建议**: 可以适当放宽 DTE 范围或 Delta 范围来获得更多选择。")
+            # 根据被指派概率过滤
+            df_filtered = df[df['p_assign'] < max_p_assign_main].copy()
+            
+            if df_filtered.empty:
+                st.warning(f"没有找到被指派概率 < {int(max_p_assign_main*100)}% 的期权")
+                df_filtered = df.copy()  # 显示所有
+            
+            display = df_filtered.copy()
+            display["yield_ann_cash"] = display["yield_ann_cash"].apply(format_percentage)
+            display["yield_ann_breakeven"] = display["yield_ann_breakeven"].apply(format_percentage)
+            display["p_assign"] = display["p_assign"].apply(format_percentage)
+            display["p_touch"] = display["p_touch"].apply(format_percentage)
+            display["mid"] = display["mid"].apply(format_currency)
+            display["premium_contract"] = display["premium_contract"].apply(format_currency)
+            display["breakeven"] = display["breakeven"].apply(format_currency)
+            display["iv"] = display["iv"].apply(lambda v: f"{v*100:.2f}%" if np.isfinite(v) else "—")
+            display["delta_put"] = display["delta_put"].apply(lambda v: f"{v:.3f}" if np.isfinite(v) else "—")
 
-        st.markdown("---")
-        st.subheader("📊 完整期权列表")
-        
-        # 根据被指派概率过滤
-        df_filtered = df[df['p_assign'] < max_p_assign_main].copy()
-        
-        if df_filtered.empty:
-            st.warning(f"没有找到被指派概率 < {int(max_p_assign_main*100)}% 的期权")
-            df_filtered = df.copy()  # 显示所有
-        
-        display = df_filtered.copy()
-        display["yield_ann_cash"] = display["yield_ann_cash"].apply(format_percentage)
-        display["yield_ann_breakeven"] = display["yield_ann_breakeven"].apply(format_percentage)
-        display["p_assign"] = display["p_assign"].apply(format_percentage)
-        display["p_touch"] = display["p_touch"].apply(format_percentage)
-        display["mid"] = display["mid"].apply(format_currency)
-        display["premium_contract"] = display["premium_contract"].apply(format_currency)
-        display["breakeven"] = display["breakeven"].apply(format_currency)
-        display["iv"] = display["iv"].apply(lambda v: f"{v*100:.2f}%" if np.isfinite(v) else "—")
-        display["delta_put"] = display["delta_put"].apply(lambda v: f"{v:.3f}" if np.isfinite(v) else "—")
+            st.dataframe(
+                display[
+                    [
+                        "expiration",
+                        "dte",
+                        "strike",
+                        "mid",
+                        "premium_contract",
+                        "iv",
+                        "delta_put",
+                        "breakeven",
+                        "yield_ann_cash",
+                        "yield_ann_breakeven",
+                        "p_assign",
+                        "p_touch",
+                        "volume",
+                        "openInterest",
+                        "contractSymbol",
+                    ]
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
 
-        st.dataframe(
-            display[
-                [
-                    "expiration",
-                    "dte",
-                    "strike",
-                    "mid",
-                    "premium_contract",
-                    "iv",
-                    "delta_put",
-                    "breakeven",
-                    "yield_ann_cash",
-                    "yield_ann_breakeven",
-                    "p_assign",
-                    "p_touch",
-                    "volume",
-                    "openInterest",
-                    "contractSymbol",
-                ]
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
+            top_n = st.slider("显示前 N 个候选（按年化收益率排序）", 1, 50, 10)
+            st.write(f"推荐候选（被指派概率 < {int(max_p_assign_main*100)}%）：")
+            st.dataframe(display.head(top_n), use_container_width=True, hide_index=True)
 
-        top_n = st.slider("显示前 N 个候选（按年化收益率排序）", 1, 50, 10)
-        st.write(f"推荐候选（被指派概率 < {int(max_p_assign_main*100)}%）：")
-        st.dataframe(display.head(top_n), use_container_width=True, hide_index=True)
-
-        st.caption(
-            "风险提示：本工具基于历史数据与简化模型进行估计，不构成任何投资建议。期权具有高风险，请谨慎评估。"
-        )
+            st.caption(
+                "风险提示：本工具基于历史数据与简化模型进行估计，不构成任何投资建议。期权具有高风险，请谨慎评估。"
+            )
 
 
 if __name__ == "__main__":
