@@ -1080,11 +1080,21 @@ def _analyze_symbol_recommendation(symbol: str, dte_min: int, dte_max: int, max_
         if df.empty:
             return None
 
+        # 先尝试严格筛选条件
         filtered = df[
             (df['yield_ann_cash'] > 0.25) &
             (df['p_assign'] < max_p_assign) &
             (df['volume'] > 50)
         ]
+
+        # 如果严格条件没有结果，尝试放宽条件
+        if filtered.empty:
+            # 放宽条件：降低收益率要求，降低成交量要求
+            filtered = df[
+                (df['yield_ann_cash'] > 0.15) &  # 降低到15%
+                (df['p_assign'] < max_p_assign) &
+                (df['volume'] > 10)  # 降低到10
+            ]
 
         if filtered.empty:
             return None
@@ -1103,7 +1113,11 @@ def _analyze_symbol_recommendation(symbol: str, dte_min: int, dte_max: int, max_
             'delta': best['delta_put'],
             'volume': best['volume']
         }
-    except Exception:
+    except Exception as e:
+        # 记录错误但不中断整个流程
+        import traceback
+        print(f"Error analyzing {symbol}: {str(e)}")
+        traceback.print_exc()
         return None
 
 def analyze_nasdaq100_recommendations():
@@ -1121,7 +1135,7 @@ def analyze_nasdaq100_recommendations():
         help="筛选被指派概率低于此值的期权"
     )
     
-    st.markdown(f"基于纳斯达克100成分股分析，筛选年化收益率>25%且被指派概率<{int(max_p_assign*100)}%的期权")
+    st.markdown(f"基于纳斯达克100成分股分析，筛选年化收益率>15%（已放宽）且被指派概率<{int(max_p_assign*100)}%的期权")
     
     # 添加筛选参数
     with st.sidebar:
@@ -1162,12 +1176,14 @@ def analyze_nasdaq100_recommendations():
             symbol = future_to_symbol[future]
             completed += 1
             progress_bar.progress(completed / total)
-            status_text.text(f"已完成 {symbol}")
+            status_text.text(f"已完成 {symbol} ({completed}/{total})")
             try:
                 result = future.result()
                 if result:
                     recommendations.append(result)
-            except Exception:
+            except Exception as e:
+                # 记录错误但不中断流程
+                print(f"处理 {symbol} 时出错: {str(e)}")
                 pass
     
     progress_bar.empty()
@@ -1179,7 +1195,7 @@ def analyze_nasdaq100_recommendations():
         recommendations.sort(key=lambda x: x['yield_ann'], reverse=True)
         
         st.success(f"找到 {len(recommendations)} 个强烈推荐期权！")
-        st.info(f"筛选条件：年化收益率 > 25%，被指派概率 < {int(max_p_assign*100)}%，成交量 > 50")
+        st.info(f"筛选条件：年化收益率 > 15%（已放宽），被指派概率 < {int(max_p_assign*100)}%，成交量 > 10（已放宽）")
         
         for i, rec in enumerate(recommendations, 1):  # 显示所有推荐
             with st.container():
