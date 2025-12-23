@@ -64,29 +64,96 @@ class MaxDrawdownResult:
 
 @st.cache_data(show_spinner=False, ttl=60 * 60)
 def fetch_price_history(symbol: str, period_years: int = 10) -> pd.DataFrame:
+    """获取股票历史价格数据，带异常处理和备选方案"""
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=365 * period_years)
-    hist = yf.download(
-        tickers=symbol,
-        start=start.date(),
-        end=end.date(),
-        interval="1d",
-        auto_adjust=True,
-        progress=False,
-        threads=True,
-    )
-    if hist is None or hist.empty:
-        return pd.DataFrame()
     
-    # 处理多级列名：如果有多级列名，只保留第一级（列名）
-    if isinstance(hist.columns, pd.MultiIndex):
-        hist.columns = hist.columns.get_level_values(0)
+    # 方法1: 尝试使用 yf.download()
+    try:
+        hist = yf.download(
+            tickers=symbol,
+            start=start.date(),
+            end=end.date(),
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+            threads=True,
+        )
+        
+        # 检查返回的数据是否有效
+        if hist is not None and not hist.empty:
+            # 处理多级列名：如果有多级列名，只保留第一级（列名）
+            if isinstance(hist.columns, pd.MultiIndex):
+                hist.columns = hist.columns.get_level_values(0)
+            
+            # 检查是否有必要的列（Close）
+            if "Close" not in hist.columns and "close" not in hist.columns:
+                # 如果没有Close列，说明数据无效，尝试备选方案
+                raise ValueError("No Close column found")
+            
+            # 重命名列名为标题格式
+            hist = hist.rename(columns=str.title)
+            
+            # 检查是否有Close列（重命名后）
+            if "Close" not in hist.columns:
+                raise ValueError("No Close column after renaming")
+            
+            hist = hist.dropna(subset=["Close"])  # safety
+            
+            # 再次检查是否还有数据
+            if not hist.empty and len(hist) > 0:
+                # 检查是否有有效的价格数据
+                if hist["Close"].notna().sum() > 0:
+                    hist.index = pd.to_datetime(hist.index).tz_localize("UTC", nonexistent="shift_forward", ambiguous="NaT")
+                    return hist
+    except Exception:
+        # 如果 yf.download() 失败，尝试备选方案
+        pass
     
-    # 重命名列名为标题格式
-    hist = hist.rename(columns=str.title)
-    hist = hist.dropna(subset=["Close"])  # safety
-    hist.index = pd.to_datetime(hist.index).tz_localize("UTC", nonexistent="shift_forward", ambiguous="NaT")
-    return hist
+    # 方法2: 备选方案 - 使用 Ticker().history()
+    try:
+        tk = yf.Ticker(symbol)
+        # 计算period参数
+        if period_years <= 1:
+            period = "1y"
+        elif period_years <= 2:
+            period = "2y"
+        elif period_years <= 5:
+            period = "5y"
+        elif period_years <= 10:
+            period = "10y"
+        else:
+            period = "max"
+        
+        hist = tk.history(period=period, interval="1d", auto_adjust=True)
+        
+        if hist is not None and not hist.empty:
+            # 确保索引是datetime类型
+            if not isinstance(hist.index, pd.DatetimeIndex):
+                hist.index = pd.to_datetime(hist.index)
+            
+            # 设置时区（如果还没有）
+            if hist.index.tz is None:
+                hist.index = hist.index.tz_localize("UTC", nonexistent="shift_forward", ambiguous="NaT")
+            else:
+                hist.index = hist.index.tz_convert("UTC")
+            
+            # 过滤日期范围（在设置时区后）
+            hist = hist[(hist.index >= start) & (hist.index <= end)]
+            
+            if not hist.empty:
+                # 重命名列名为标题格式
+                hist = hist.rename(columns=str.title)
+                hist = hist.dropna(subset=["Close"])
+                
+                if not hist.empty:
+                    return hist
+    except Exception as e:
+        # 如果备选方案也失败，返回空DataFrame
+        pass
+    
+    # 如果所有方法都失败，返回空DataFrame
+    return pd.DataFrame()
 
 
 def compute_max_drawdown(close: pd.Series) -> MaxDrawdownResult:
@@ -1744,7 +1811,18 @@ def main() -> None:
             # Price history and MDD
             hist = fetch_price_history(symbol, years)
             if hist.empty:
-                st.error("未能获取历史数据，请检查股票代码或稍后重试。")
+                st.error(f"未能获取 {symbol} 的历史数据，请检查：")
+                st.markdown("""
+                1. **股票代码是否正确** - 确保输入的是有效的美股代码（如 AAPL, MSFT, SPY）
+                2. **网络连接** - 检查网络连接是否正常
+                3. **数据源** - yfinance API 可能暂时不可用，请稍后重试
+                4. **股票是否退市** - 如果股票已退市，可能无法获取数据
+                
+                **建议操作：**
+                - 尝试刷新页面
+                - 检查股票代码拼写
+                - 稍等片刻后重试（可能是API限流）
+                """)
                 return
 
             mdd = compute_max_drawdown(hist["Close"]) 
@@ -1782,54 +1860,54 @@ def main() -> None:
                 else:
                     st.metric("最大回撤低点", "—")
 
-            st.plotly_chart(plot_price_and_drawdown(hist, mdd.series), use_container_width=True)
+        st.plotly_chart(plot_price_and_drawdown(hist, mdd.series), use_container_width=True)
+        
+        # 添加说明
+        with st.expander("📊 指标说明", expanded=False):
+            st.markdown("""
+            **历史数据指标说明：**
+            - **现价**: 当前股票市场价格
+            - **最大回撤**: 历史上从某个峰值到谷值的最大跌幅百分比
+            - **历史最高价**: 显示价格和时间，整个历史期间的最高价格
+            - **最大回撤低点**: 显示价格和时间，以及从哪个峰值回撤而来
             
-            # 添加说明
-            with st.expander("📊 指标说明", expanded=False):
-                st.markdown("""
-                **历史数据指标说明：**
-                - **现价**: 当前股票市场价格
-                - **最大回撤**: 历史上从某个峰值到谷值的最大跌幅百分比
-                - **历史最高价**: 显示价格和时间，整个历史期间的最高价格
-                - **最大回撤低点**: 显示价格和时间，以及从哪个峰值回撤而来
-                
-                **显示格式说明：**
-                - 主值显示价格（如 $183.15）
-                - Delta显示相对时间（如 "30天前"）
-                - 悬停提示显示完整信息（价格、具体日期、回撤详情）
-                
-                **重要区别：**
-                - **历史最高价** ≠ **最大回撤的峰值**
-                - 历史最高价是绝对的最高价格
-                - 最大回撤的峰值是导致最大回撤的那个峰值（可能不是历史最高价）
-                
-                **回撤分析意义：**
-                - 回撤越小，说明股票价格相对稳定
-                - 回撤越大，说明股价波动较大，卖出看跌期权风险相对较高
-                - 建议结合历史回撤情况选择合适的期权策略
-                """)
-
-            # Options analysis
-            st.subheader("卖出看跌期权（CSP）收益与风险估算")
-            exps = fetch_option_expirations(symbol)
-            if not exps:
-                st.warning("该标的暂无可用期权到期日或数据获取失败。")
-                return
+            **显示格式说明：**
+            - 主值显示价格（如 $183.15）
+            - Delta显示相对时间（如 "30天前"）
+            - 悬停提示显示完整信息（价格、具体日期、回撤详情）
             
-            dte_min, dte_max = dte_range
-            df = analyze_puts(
-                symbol=symbol,
-                spot=spot if spot is not None else float(hist["Close"].iloc[-1]),
-                expirations=exps,
-                dte_min=int(dte_min),
-                dte_max=int(dte_max),
-                target_delta_abs_min=float(delta_abs_range[0]),
-                target_delta_abs_max=float(delta_abs_range[1]),
-                risk_free_rate=float(rf),
-                dividend_yield=float(q),
-            )
+            **重要区别：**
+            - **历史最高价** ≠ **最大回撤的峰值**
+            - 历史最高价是绝对的最高价格
+            - 最大回撤的峰值是导致最大回撤的那个峰值（可能不是历史最高价）
+            
+            **回撤分析意义：**
+            - 回撤越小，说明股票价格相对稳定
+            - 回撤越大，说明股价波动较大，卖出看跌期权风险相对较高
+            - 建议结合历史回撤情况选择合适的期权策略
+            """)
 
-            if df.empty:
+        # Options analysis
+        st.subheader("卖出看跌期权（CSP）收益与风险估算")
+        exps = fetch_option_expirations(symbol)
+        if not exps:
+            st.warning("该标的暂无可用期权到期日或数据获取失败。")
+            return
+        
+        dte_min, dte_max = dte_range
+        df = analyze_puts(
+            symbol=symbol,
+            spot=spot if spot is not None else float(hist["Close"].iloc[-1]),
+            expirations=exps,
+            dte_min=int(dte_min),
+            dte_max=int(dte_max),
+            target_delta_abs_min=float(delta_abs_range[0]),
+            target_delta_abs_max=float(delta_abs_range[1]),
+            risk_free_rate=float(rf),
+            dividend_yield=float(q),
+        )
+
+        if df.empty:
                 st.info("按当前筛选条件未找到合适的期权合约，可调整 DTE 或 |Delta| 范围。")
                 return
 
